@@ -1,0 +1,11 @@
+export DATABASE_HOST=
+export DATABASE_USERNAME=
+export DATABASE_PASSWORD=
+export DATABASE_NAME=
+export DATABASE_PORT=
+export SECRET_KEY=
+export DOMAIN=localhost
+export DEV_MODE=
+export TEST_USERNAME=
+export TEST_PASSWORD=
+export FLASK_ENV=

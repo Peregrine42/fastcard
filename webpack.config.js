@@ -1,9 +1,10 @@
 const path = require("path")
+const ForkTsCheckerWebpackPlugin = require('fork-ts-checker-webpack-plugin');
 
 module.exports = (env) => {
     return {
         mode: env.development ? "development" : "production",
-        devtool: env.development ? "inline-source-map" : undefined,
+        devtool: env.development ? "eval-cheap-module-source-map" : undefined,
         entry: {
             main: "./client/app.ts",
             signIn: "./client/signIn.ts"
@@ -19,8 +20,15 @@ module.exports = (env) => {
         },
         module: {
             rules: [
-                { test: /\.tsx?$/, loader: "ts-loader" }
+                {
+                    test: /\.tsx?$/,
+                    loader: "ts-loader",
+                    options: {
+                        transpileOnly: true
+                    }
+                }
             ]
-        }
+        },
+        plugins: [new ForkTsCheckerWebpackPlugin()]
     }
 }

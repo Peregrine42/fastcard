@@ -17,22 +17,22 @@
     </head>
     <body>
         {% if success %}
-            <div id="success">{{ success }}</div>
+            <div id="success">{{ ', '.join(success) }}</div>
         {% endif %}
         {% if errors %}
             <div id="errors">
                 {% for error in errors %}
-                    <div class="error">{{ error }}</div>
+                    <div class="error">{{ ', '.join(error) }}</div>
                 {% endfor %}
             </div>
         {% endif %}
         {% if info %}
-            <div id="info">{{ info }}</div>
+            <div id="info">{{ ', '.join(info) }}</div>
         {% endif %}
         {% if credentials and credentials.username %}
             <div>Username: {{ credentials.username }}</div>
             <form method="post" accept-charset="UTF-8" action="/sign-out">
-                <input type="hidden" name="csrftoken" value="{{ csrf }}"/>
+                {{ form.csrf_token }}
                 <input id="sign-out" type="submit" value="Sign out">
             </form>
         {% endif %}

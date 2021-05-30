@@ -4,7 +4,7 @@
 {% set cssEntry = "/css/signIn.css" %}
 {% block body %}
     <form method="post" accept-charset="UTF-8" action="/sign-in">
-        <input id="csrf" type="hidden" name="csrftoken" value="{{ csrf }}"/>
+        {{ form.csrf_token }}
         <h3>
             <label for="username">Username</label>
         </h3>

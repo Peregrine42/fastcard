@@ -2,9 +2,9 @@
 {% set scriptEntry = "/protected/js/main.js" %}
 {% set title = "Home" %}
 {% block body %}
+    {{ form.csrf_token }}
     <div id="view"></div>
     <div id="message-box"></div>
     <input id="chat-box" type="text"/>
     <input id="send" type="button" name="Send"/>
-    <input id="csrf" type="hidden" name="csrftoken" value="{{ csrf }}"/>
 {% endblock %}

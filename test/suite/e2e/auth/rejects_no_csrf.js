@@ -26,7 +26,7 @@ describe("Auth", function () {
 		await browser.url("localhost:8080")
 
 		const script = `
-            document.getElementById("csrf").remove()
+            document.getElementById("csrf_token").remove()
         `
 		await browser.execute(script)
 		const result = await tryToSignInWith(

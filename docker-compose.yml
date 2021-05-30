@@ -5,14 +5,5 @@ services:
         volumes:
             - ".:/opt/app/"
         network_mode: host
-        environment:
-            DATABASE_HOST: "${DATABASE_HOST}"
-            DATABASE_USERNAME: "${DATABASE_USERNAME}"
-            DATABASE_PASSWORD: "${DATABASE_PASSWORD}"
-            DATABASE_NAME: "${DATABASE_NAME}"
-            DATABASE_PORT: "${DATABASE_PORT}"
-            SESSION_SECRET: "${SESSION_SECRET}"
-            DOMAIN: "${DOMAIN}"
-            DEV_MODE: "${DEV_MODE}"
-            TEST_USERNAME: "${TEST_USERNAME}"
-            TEST_PASSWORD: "${TEST_PASSWORD}"
+        env_file:
+            - '.envrc'
