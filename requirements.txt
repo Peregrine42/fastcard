@@ -1,0 +1,8 @@
+aiofiles==0.7.0
+autopep8==1.5.7
+fastapi==0.65.1
+flake8==3.9.2
+Jinja2==3.0.1
+uvicorn==0.13.4
+asgi-csrf==0.8
+asgi-sessions==0.8.3

@@ -1,0 +1,8 @@
+node_modules/
+.envrc
+env
+__pycache__
+static/protected/*
+static/public/*
+!static/public/css
+!static/protected/css

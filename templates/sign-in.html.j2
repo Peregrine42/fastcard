@@ -1,0 +1,18 @@
+{% extends "layout.html.j2" %}
+{% set title = "Sign in" %}
+{% set scriptEntry = "/js/signIn.js" %}
+{% set cssEntry = "/css/signIn.css" %}
+{% block body %}
+    <form method="post" accept-charset="UTF-8" action="/sign-in">
+        <input id="csrf" type="hidden" name="csrftoken" value="{{ csrf }}"/>
+        <h3>
+            <label for="username">Username</label>
+        </h3>
+        <input id="username" type="text" name="username" value="{{ username }}"/>
+        <h3>
+            <label for="password">Password</label>
+        </h3>
+        <input id="password" type="password" name="password"/>
+        <input id="submit" type="submit" value="Submit"/>
+    </form>
+{% endblock %}
