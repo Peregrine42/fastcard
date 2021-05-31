@@ -12,6 +12,17 @@ module.exports.tryToSignInWith = async function (username, password) {
     browserLog("new page: ", await browser.getTitle())
 
     const signInMessage = await browser.$("#success")
+
+    try {
+        await browser.waitUntil(async () => {
+            return await signInMessage.isExisting()
+        })
+    } catch (e) {
+        console.error(e)
+        return false
+    }
+
+
     if (await signInMessage.isExisting()) {
         return (await signInMessage.getText()) === "Sign in complete"
     } else {

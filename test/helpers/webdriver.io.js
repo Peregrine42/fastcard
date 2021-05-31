@@ -120,16 +120,17 @@ async function poll(url, expectedErrorCode = null) {
     await poll("http://localhost:4444", 405)
 
     console.log("starting main process...")
-    testChild = execa(
-        'mocha',
-        [
-            "--color",
-            "--timeout", "30000",
-            "--full-trace", "--recursive",
-            "--exclude", "test/helpers/**/*"
-        ].concat(
-            process.argv.slice(2)
-        ),
+    command = `mocha \
+        --color \
+        --timeout 30000 \
+        --full-trace \
+        --recursive \
+        --exclude test/helpers/**/* \
+        ${process.argv.slice(2).join(' ')}
+    `
+    console.log(command)
+    testChild = execa.command(
+        command,
         {
             all: true,
         }

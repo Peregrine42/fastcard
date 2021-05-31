@@ -6,7 +6,7 @@ module.exports = {
 			`
 				create table cards (
 					id serial,
-					owner text not null,
+					owner text,
 					x integer not null,
 					y integer not null,
 					details jsonb not null,

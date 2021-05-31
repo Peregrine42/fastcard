@@ -1,10 +1,9 @@
 {% extends "layout.html.j2" %}
 {% set scriptEntry = "/protected/js/main.js" %}
+{% set cssEntry = "/protected/css/main.css" %}
 {% set title = "Home" %}
 {% block body %}
     {{ form.csrf_token }}
+    <div id="card-list"></div>
     <div id="view"></div>
-    <div id="message-box"></div>
-    <input id="chat-box" type="text"/>
-    <input id="send" type="button" name="Send"/>
 {% endblock %}
