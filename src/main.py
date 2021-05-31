@@ -6,8 +6,9 @@ from typing import Dict
 from flask import Flask, render_template, session, request, send_from_directory, g
 from flask.helpers import flash, get_flashed_messages, url_for
 from flask.json import jsonify
-from sqlalchemy.orm import load_only
-from sqlalchemy.sql.expression import values
+from sqlalchemy.sql.expression import or_
+from sqlalchemy.sql.functions import now
+from sqlalchemy.orm.attributes import flag_modified
 from werkzeug.utils import redirect
 from flask_wtf import FlaskForm
 from wtforms import StringField
@@ -69,6 +70,14 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
 
+class UserModel(db.Model):
+    __tablename__ = 'users'
+
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String)
+    encrypted_password = db.Column(db.String)
+
+
 @dataclass
 class CardModel(db.Model):
     __tablename__ = 'cards'
@@ -83,14 +92,7 @@ class CardModel(db.Model):
     x = db.Column(db.Integer())
     y = db.Column(db.Integer())
     updated_at = db.Column(db.DateTime())
-
-
-class UserModel(db.Model):
-    __tablename__ = 'users'
-
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String)
-    encrypted_password = db.Column(db.String)
+    owner = db.Column(db.ForeignKey(UserModel.id))
 
 
 class HomeForm(FlaskForm):
@@ -106,7 +108,77 @@ def status():
 @app.get('/current-user/cards')
 @auth
 def get_cards(user):
-    cards = db.session().query(CardModel).all()
+    cards = db.session().query(CardModel).filter(or_(CardModel.owner == None, CardModel.owner == user.id)).all()
+    return jsonify({
+        'cards': cards
+    })
+
+
+def getId(cardUpdate):
+    return cardUpdate["id"]
+
+
+@app.post('/current-user/cards')
+@auth
+def update_cards(user):
+    payload = sorted(request.json["cardUpdates"], key=getId)
+    ids = [p["id"] for p in payload]
+    cards = db.session().query(CardModel).filter(CardModel.id.in_(ids)).filter(or_(CardModel.owner == None, CardModel.owner == user.id)).order_by(CardModel.id).all()
+    if len(cards):
+        for i, c in enumerate(cards):
+            p = payload[i]
+            updated = False
+            if p.get("x", None):
+                c.x = p["x"]
+                updated = True
+            if p.get("y", None):
+                c.y = p["y"]
+                updated = True
+            if p.get("details", None):
+                details = p["details"]
+                if details.get("rotation", None):
+                    c.details["rotation"] = details["rotation"]
+                    flag_modified(c, "details")
+                    updated = True
+                if details.get("facing", None):
+                    c.details["facing"] = details["facing"]
+                    flag_modified(c, "details")
+                    updated = True
+
+            if updated:
+                c.updated_at = now()
+        db.session().commit()
+
+    return jsonify({
+        'cards': cards
+    })
+
+
+@app.post("/current-user/cards/take")
+@auth
+def take_cards(user):
+    ids = sorted(request.json["cardIds"])
+    cards = db.session().query(CardModel).filter(CardModel.id.in_(ids)).filter(or_(CardModel.owner == None, CardModel.owner == user.id)).order_by(CardModel.id).all()
+    if len(cards):
+        for c in cards:
+            if c.owner is None:
+                c.owner = user.id
+        db.session().commit()
+    return jsonify({
+        'cards': cards
+    })
+
+
+@app.post("/current-user/cards/drop")
+@auth
+def drop_cards(user):
+    ids = sorted(request.json["cardIds"])
+    cards = db.session().query(CardModel).filter(CardModel.id.in_(ids)).filter(or_(CardModel.owner == None, CardModel.owner == user.id)).order_by(CardModel.id).all()
+    if len(cards):
+        for c in cards:
+            if c.owner == user.id:
+                c.owner = None
+        db.session().commit()
     return jsonify({
         'cards': cards
     })

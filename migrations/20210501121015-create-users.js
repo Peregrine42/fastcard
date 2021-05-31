@@ -3,7 +3,7 @@ module.exports = {
 		await queryInterface.sequelize.query(
 			`
 				create table users (
-					id serial,
+					id serial unique,
 					username text unique not null,
 					encrypted_password text not null,
 					enabled boolean default true

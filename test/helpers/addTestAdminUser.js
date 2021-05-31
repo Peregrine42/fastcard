@@ -1,5 +1,5 @@
 const { addTestUser } = require("./addTestUser")
 
-module.exports.addTestAdminUser = async function (sequelize, username, password) {
-    await addTestUser(sequelize, username, password)
+module.exports.addTestAdminUser = function (sequelize, username, password) {
+    return addTestUser(sequelize, username, password)
 }

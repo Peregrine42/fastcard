@@ -1,8 +1,8 @@
 const { encrypt } = require("./encrypt")
 
 module.exports.addTestUser = async function (sequelize, username, password) {
-	await sequelize.query(
-		`
+    const [rows] = await sequelize.query(
+        `
           insert into users (
               username,
               encrypted_password,
@@ -12,9 +12,12 @@ module.exports.addTestUser = async function (sequelize, username, password) {
               $password,
               't'
           )
+          returning id
         `,
-		{
-			bind: { password: await encrypt(password), username }
-		}
-	);
+        {
+            bind: { password: await encrypt(password), username }
+        }
+    );
+
+    return rows[0].id
 }

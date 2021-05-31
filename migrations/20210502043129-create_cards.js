@@ -5,8 +5,10 @@ module.exports = {
 		await queryInterface.sequelize.query(
 			`
 				create table cards (
-					id serial,
-					owner text,
+					id serial unique,
+					owner int,
+					FOREIGN KEY(owner) 
+   					REFERENCES users(id),
 					x integer not null,
 					y integer not null,
 					details jsonb not null,
