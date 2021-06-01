@@ -110,7 +110,7 @@ def status():
 def get_cards(user):
     cards = db.session().query(CardModel).filter(or_(CardModel.owner == None, CardModel.owner == user.id)).order_by(CardModel.id).all()
     return jsonify({
-        'cards': cards
+        'cards': getCards(user)
     })
 
 
@@ -118,15 +118,36 @@ def getId(cardUpdate):
     return cardUpdate["id"]
 
 
+def getCards(user, ids=None):
+    if ids is None:
+        return db.session().query(CardModel).filter(or_(CardModel.owner == None, CardModel.owner == user.id)).order_by(CardModel.id).all()
+    return db.session().query(CardModel).filter(CardModel.id.in_(ids)).filter(or_(CardModel.owner == None, CardModel.owner == user.id)).order_by(CardModel.id).all()
+
+
 @app.post('/current-user/cards')
 @auth
 def update_cards(user):
-    payload = sorted(request.json["cardUpdates"], key=getId)
-    ids = [p["id"] for p in payload]
-    cards = db.session().query(CardModel).filter(CardModel.id.in_(ids)).filter(or_(CardModel.owner == None, CardModel.owner == user.id)).order_by(CardModel.id).all()
-    if len(cards):
-        for i, c in enumerate(cards):
-            p = payload[i]
+    cardUpdates = sorted(request.json.get("cardUpdates", []), key=getId)
+    cardIds = [p["id"] for p in cardUpdates]
+
+    grabbedIds = sorted(request.json.get("cardGrabs", []))
+    droppedIds = sorted(request.json.get("cardDrops", []))
+
+    updatedCards = getCards(user, cardIds)
+    grabbedCards = getCards(user, grabbedIds)
+    droppedCards = getCards(user, droppedIds)
+
+    if len(updatedCards) or len(grabbedCards) or len(droppedCards):
+        for c in grabbedCards:
+            if c.owner is None:
+                c.owner = user.id
+
+        for c in droppedCards:
+            if c.owner == user.id:
+                c.owner = None
+
+        for i, c in enumerate(updatedCards):
+            p = cardUpdates[i]
             updated = False
             if p.get("x", None):
                 c.x = p["x"]
@@ -150,42 +171,12 @@ def update_cards(user):
         db.session().commit()
 
     return jsonify({
-        'cards': cards
+        'success': True
     })
 
 
-@app.post("/current-user/cards/take")
-@auth
-def take_cards(user):
-    ids = sorted(request.json["cardIds"])
-    cards = db.session().query(CardModel).filter(CardModel.id.in_(ids)).filter(or_(CardModel.owner == None, CardModel.owner == user.id)).order_by(CardModel.id).all()
-    if len(cards):
-        for c in cards:
-            if c.owner is None:
-                c.owner = user.id
-        db.session().commit()
-    return jsonify({
-        'cards': cards
-    })
-
-
-@app.post("/current-user/cards/drop")
-@auth
-def drop_cards(user):
-    ids = sorted(request.json["cardIds"])
-    cards = db.session().query(CardModel).filter(CardModel.id.in_(ids)).filter(or_(CardModel.owner == None, CardModel.owner == user.id)).order_by(CardModel.id).all()
-    if len(cards):
-        for c in cards:
-            if c.owner == user.id:
-                c.owner = None
-        db.session().commit()
-    return jsonify({
-        'cards': cards
-    })
-
-
-@app.get('/')
-@auth
+@ app.get('/')
+@ auth
 def root(user):
     form = HomeForm()
     return render_template(
@@ -197,8 +188,8 @@ def root(user):
 
 
 if os.getenv('DEV_MODE') == 'true':
-    @app.post('/log')
-    @auth
+    @ app.post('/log')
+    @ auth
     def debug_log(user):
         app.logger.info(
             'from client: ' +
@@ -220,8 +211,8 @@ def check(hash, incoming_password):
     return False
 
 
-@app.route("/sign-in", methods=['GET', 'POST'])
-@no_auth
+@ app.route("/sign-in", methods=['GET', 'POST'])
+@ no_auth
 def sign_in_form():
     form = SignInForm()
     if form.validate_on_submit():
@@ -237,14 +228,14 @@ def sign_in_form():
     )
 
 
-@app.get("/protected/<path:name>")
-@auth
+@ app.get("/protected/<path:name>")
+@ auth
 def serve_static_protected(user, name):
     return send_from_directory('../static/protected/', name)
 
 
-@app.get("/<path:name>")
-@no_auth
+@ app.get("/<path:name>")
+@ no_auth
 def serve_static_public(name):
     try:
         return send_from_directory('../static/public/', name)

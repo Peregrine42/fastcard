@@ -1,5 +1,4 @@
 const expect = require('chai').expect
-const { browserLog } = require("../../../helpers/browserLog")
 const { buildBrowser } = require("../../../helpers/buildBrowser")
 const { getDbConnection } = require("../../../helpers/getDbConnection")
 const { tryToSignInWith } = require("../../../helpers/tryToSignInWith")
@@ -71,19 +70,15 @@ describe("Cards", function () {
             process.env.TEST_PASSWORD,
         )
 
-        const response = await axios.get("http://localhost:8080/current-user/cards", {
-            jar: cookieJar,
-            withCredentials: true
-        })
-
-        const xs = [0, 1, 2, 3]
-        const ys = [3, 2, 1, 0]
-        const rotations = [0, 90, 180, 270]
-        const facings = [true, false, true, false]
+        const ids = [card3Id, card4Id, card2Id, card1Id]
+        const xs = [2, 3, 1, 0]
+        const ys = [1, 0, 2, 3]
+        const rotations = [180, 270, 90, 0]
+        const facings = [true, false, false, true]
         await axios.post("http://localhost:8080/current-user/cards", {
-            cardUpdates: response.data.cards.map((c, i) => {
+            cardUpdates: ids.map((id, i) => {
                 return {
-                    id: c.id,
+                    id,
                     x: xs[i],
                     y: ys[i],
                     details: {
@@ -147,6 +142,90 @@ describe("Cards", function () {
             ]
         )
     });
+
+    it('can grab a card', async () => {
+        await addTestAdminUser(sequelize, process.env.TEST_USERNAME, process.env.TEST_PASSWORD)
+        await addTestAdminUser(sequelize, process.env.TEST_USERNAME + "2", process.env.TEST_PASSWORD)
+        const cardId = await addTestCard("Card 1")
+
+        const cookieJar = await cliSignIn(
+            process.env.TEST_USERNAME,
+            process.env.TEST_PASSWORD,
+        )
+
+        await axios.post("http://localhost:8080/current-user/cards", {
+            cardGrabs: [
+                cardId
+            ],
+            cardUpdates: [
+                {
+                    id: cardId,
+                    y: 10
+                }
+            ]
+        }, {
+            jar: cookieJar,
+            withCredentials: true
+        })
+
+        const response = await axios.get("http://localhost:8080/current-user/cards", {
+            jar: cookieJar,
+            withCredentials: true
+        })
+
+        expect(response.data.cards[0].y).to.eq(10)
+
+        const cookieJar2 = await cliSignIn(
+            process.env.TEST_USERNAME + "2",
+            process.env.TEST_PASSWORD,
+        )
+
+        const response2 = await axios.get("http://localhost:8080/current-user/cards", {
+            jar: cookieJar2,
+            withCredentials: true
+        })
+
+        expect(response2.data.cards.length).to.eq(0)
+    })
+
+    it('can drop a card', async () => {
+        const userId1 = await addTestAdminUser(sequelize, process.env.TEST_USERNAME, process.env.TEST_PASSWORD)
+        const userId2 = await addTestAdminUser(sequelize, process.env.TEST_USERNAME + "2", process.env.TEST_PASSWORD)
+        const cardId = await addTestCard("Card 1", userId1)
+
+        const cookieJar = await cliSignIn(
+            process.env.TEST_USERNAME,
+            process.env.TEST_PASSWORD,
+        )
+
+        const cookieJar2 = await cliSignIn(
+            process.env.TEST_USERNAME + "2",
+            process.env.TEST_PASSWORD,
+        )
+
+        const initialCheck = await axios.get("http://localhost:8080/current-user/cards", {
+            jar: cookieJar2,
+            withCredentials: true
+        })
+
+        expect(initialCheck.data.cards.length).to.eq(0)
+
+        await axios.post("http://localhost:8080/current-user/cards", {
+            cardDrops: [
+                cardId
+            ],
+        }, {
+            jar: cookieJar,
+            withCredentials: true
+        })
+
+        const response = await axios.get("http://localhost:8080/current-user/cards", {
+            jar: cookieJar2,
+            withCredentials: true
+        })
+
+        expect(response.data.cards.length).to.eq(1)
+    })
 
     it('can list all the public cards, plus any cards owned by the current user', async function () {
         const userId = await addTestAdminUser(sequelize, process.env.TEST_USERNAME, process.env.TEST_PASSWORD)
