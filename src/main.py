@@ -108,7 +108,7 @@ def status():
 @app.get('/current-user/cards')
 @auth
 def get_cards(user):
-    cards = db.session().query(CardModel).filter(or_(CardModel.owner == None, CardModel.owner == user.id)).all()
+    cards = db.session().query(CardModel).filter(or_(CardModel.owner == None, CardModel.owner == user.id)).order_by(CardModel.id).all()
     return jsonify({
         'cards': cards
     })
