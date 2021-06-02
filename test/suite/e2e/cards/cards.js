@@ -128,6 +128,7 @@ describe("Cards", function () {
                         "rotation": 0,
                     },
                     "id": card1Id,
+                    "url": "back.jpg",
                     "x": 0,
                     "y": 3,
                 },
@@ -138,6 +139,7 @@ describe("Cards", function () {
                         "rotation": 90
                     },
                     "id": card2Id,
+                    "url": "back.jpg",
                     "x": 1,
                     "y": 2,
                 },
@@ -148,6 +150,7 @@ describe("Cards", function () {
                         "rotation": 180,
                     },
                     "id": card3Id,
+                    "url": "back.jpg",
                     "x": 2,
                     "y": 1
                 },
@@ -158,6 +161,7 @@ describe("Cards", function () {
                         "rotation": 270,
                     },
                     "id": card4Id,
+                    "url": "back.jpg",
                     "x": 3,
                     "y": 0,
                 }
