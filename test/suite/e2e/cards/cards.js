@@ -1,7 +1,8 @@
-const expect = require('chai').expect
+const chai = require('chai')
+const expect = chai.expect
+const chaiSubset = require('chai-subset');
 const { buildBrowser } = require("../../../helpers/buildBrowser")
 const { getDbConnection } = require("../../../helpers/getDbConnection")
-const { tryToSignInWith } = require("../../../helpers/tryToSignInWith")
 const { resetDb } = require("../../../helpers/resetDb")
 const { addTestAdminUser } = require("../../../helpers/addTestAdminUser")
 const axios = require('axios').default;
@@ -9,6 +10,7 @@ const axiosCookieJarSupport = require('axios-cookiejar-support').default;
 const tough = require('tough-cookie');
 const { parse } = require('node-html-parser')
 
+chai.use(chaiSubset)
 axiosCookieJarSupport(axios);
 
 let browser
@@ -22,7 +24,8 @@ async function addTestCard(
     rotation = 0,
     facing = false,
     back = "back.jpg",
-    front = "facing.jpg"
+    front = "facing.jpg",
+    z = 0
 ) {
     const url = facing ? front : back
     const [rows] = await sequelize.query(`
@@ -56,7 +59,8 @@ async function addTestCard(
             details: {
                 name,
                 rotation,
-                facing
+                facing,
+                z,
             },
             owner: ownerId,
             back,
@@ -126,6 +130,7 @@ describe("Cards", function () {
                         "facing": true,
                         "name": "Card 1",
                         "rotation": 0,
+                        "z": 0
                     },
                     "id": card1Id,
                     "url": "back.jpg",
@@ -136,7 +141,8 @@ describe("Cards", function () {
                     "details": {
                         "facing": false,
                         "name": "Card 2",
-                        "rotation": 90
+                        "rotation": 90,
+                        "z": 0
                     },
                     "id": card2Id,
                     "url": "back.jpg",
@@ -148,6 +154,7 @@ describe("Cards", function () {
                         "facing": true,
                         "name": "Card 3",
                         "rotation": 180,
+                        "z": 0
                     },
                     "id": card3Id,
                     "url": "back.jpg",
@@ -159,6 +166,7 @@ describe("Cards", function () {
                         "facing": false,
                         "name": "Card 4",
                         "rotation": 270,
+                        "z": 0
                     },
                     "id": card4Id,
                     "url": "back.jpg",
@@ -307,6 +315,123 @@ describe("Cards", function () {
         expect(response.data.cards[0].details.facing).to.eq(true)
         expect(response.data.cards[0].details.id).to.not.eq(initialId)
         expect(response.data.cards[0].url).to.eq("other-image.jpg")
+    })
+
+    it('can shuffle cards', async () => {
+        await addTestAdminUser(sequelize, process.env.TEST_USERNAME, process.env.TEST_PASSWORD)
+        const cardId1 = await addTestCard(
+            "Card 1",
+            null, 0, 0, 0, false,
+            "1.jpg",
+            "other.jpg",
+            1
+        )
+        const cardId2 = await addTestCard(
+            "Card 2",
+            null, 0, 0, 0, false,
+            "2.jpg",
+            "other.jpg",
+            2
+        )
+        const cardId3 = await addTestCard(
+            "Card 3",
+            null, 0, 0, 0, false,
+            "3.jpg",
+            "other.jpg",
+            3
+        )
+        const cardId4 = await addTestCard(
+            "Card 4",
+            null, 0, 0, 0, false,
+            "4.jpg",
+            "other.jpg",
+            4
+        )
+
+
+        const { cookieJar, csrf } = await cliSignIn(
+            process.env.TEST_USERNAME,
+            process.env.TEST_PASSWORD,
+        )
+
+        await axios.post("http://localhost:8080/current-user/cards", {
+            cardShuffles: [
+                cardId1,
+                cardId2,
+                cardId3,
+                cardId4,
+            ],
+        }, {
+            jar: cookieJar,
+            withCredentials: true,
+            headers: {
+                'X-CSRF-TOKEN': csrf
+            }
+        })
+
+        const response = await axios.get("http://localhost:8080/current-user/cards", {
+            jar: cookieJar,
+            withCredentials: true
+        })
+
+        expect(response.data.cards).to.containSubset(
+            [
+                {
+                    "details": {
+                        "facing": false,
+                        "name": "Card 1",
+                        "rotation": 0,
+                        "z": 1
+                    },
+                    "url": "1.jpg",
+                    "x": 0,
+                    "y": 0,
+                },
+                {
+                    "details": {
+                        "facing": false,
+                        "name": "Card 2",
+                        "rotation": 0,
+                        "z": 3
+                    },
+                    "url": "2.jpg",
+                    "x": 0,
+                    "y": 0,
+                },
+                {
+                    "details": {
+                        "facing": false,
+                        "name": "Card 3",
+                        "rotation": 0,
+                        "z": 4
+                    },
+                    "url": "3.jpg",
+                    "x": 0,
+                    "y": 0
+                },
+                {
+                    "details": {
+                        "facing": false,
+                        "name": "Card 4",
+                        "rotation": 0,
+                        "z": 2
+                    },
+                    "url": "4.jpg",
+                    "x": 0,
+                    "y": 0,
+                }
+            ]
+        )
+
+        const check = await axios.get("http://localhost:8080/current-user/cards", {
+            jar: cookieJar,
+            withCredentials: true
+        })
+
+        expect(check.data.cards.find(c => c.details.name === "Card 1").id).to.not.eq(cardId1)
+        expect(check.data.cards.find(c => c.details.name === "Card 2").id).to.not.eq(cardId2)
+        expect(check.data.cards.find(c => c.details.name === "Card 3").id).to.not.eq(cardId3)
+        expect(check.data.cards.find(c => c.details.name === "Card 4").id).to.not.eq(cardId4)
     })
 
     it('can list all the public cards, plus any cards owned by the current user', async function () {

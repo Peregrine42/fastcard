@@ -2,6 +2,8 @@ from dataclasses import dataclass
 import os
 import functools
 from typing import Dict
+import random
+from functools import partial
 
 from flask import Flask, render_template, session, request, send_from_directory, g
 from flask.helpers import flash, get_flashed_messages, url_for
@@ -23,6 +25,9 @@ app.secret_key = os.getenv('SECRET_KEY')
 
 csrf = CSRFProtect()
 csrf.init_app(app)
+
+if os.getenv("DEV_MODE"):
+    random.seed(100)
 
 
 def signed_in():
@@ -133,59 +138,86 @@ def query_cards(user, ids=None):
     return result
 
 
+def flip_card(c):
+    c.details["facing"] = not c.details["facing"]
+    if c.details["facing"]:
+        c.url = c.front
+    else:
+        c.url = c.back
+    flag_modified(c, "details")
+
+
+def set_z(z, c):
+    c.details["z"] = z
+    flag_modified(c, "details")
+
+
+def clone_card(c, change_func):
+    new_card = CardModel(
+        details={
+            "facing": c.details["facing"],
+            "rotation": c.details["rotation"],
+            "name": c.details["name"],
+            "z": c.details["z"]
+        },
+        x=c.x,
+        y=c.y,
+        front=c.front,
+        back=c.back,
+        url=c.url,
+        updated_at=now(),
+        owner=c.owner,
+    )
+    change_func(new_card)
+
+    db.session().add(new_card)
+    db.session().delete(c)
+
+
 @app.post('/current-user/cards')
 @auth
 def update_cards(user):
-    cardUpdates = sorted(request.json.get("cardUpdates", []), key=getId)
-    cardIds = [p["id"] for p in cardUpdates]
+    card_updates = sorted(request.json.get("cardUpdates", []), key=getId)
+    card_ids = [p["id"] for p in card_updates]
 
-    grabbedIds = sorted(request.json.get("cardGrabs", []))
-    droppedIds = sorted(request.json.get("cardDrops", []))
-    flippedIds = sorted(request.json.get("cardFlips", []))
+    grabbed_ids = sorted(request.json.get("cardGrabs", []))
+    dropped_ids = sorted(request.json.get("cardDrops", []))
+    flipped_ids = sorted(request.json.get("cardFlips", []))
+    shuffled_ids = sorted(request.json.get("cardShuffles", []))
 
-    updatedCards = query_cards(user, cardIds)
-    grabbedCards = query_cards(user, grabbedIds)
-    droppedCards = query_cards(user, droppedIds)
-    flippedCards = query_cards(user, flippedIds)
+    updated_cards = query_cards(user, card_ids)
+    grabbed_cards = query_cards(user, grabbed_ids)
+    dropped_cards = query_cards(user, dropped_ids)
+    flipped_cards = query_cards(user, flipped_ids)
+    shuffled_cards = query_cards(user, shuffled_ids)
 
     if (
-        len(updatedCards) or
-        len(grabbedCards) or
-        len(droppedCards) or
-        len(flippedCards)
+        len(updated_cards) or
+        len(grabbed_cards) or
+        len(dropped_cards) or
+        len(flipped_cards) or
+        len(shuffled_cards)
     ):
-        for c in grabbedCards:
+        if len(shuffled_cards):
+            zs = [c.details["z"] for c in shuffled_cards]
+            random.shuffle(zs)
+            for i, c in enumerate(shuffled_cards):
+                if c.owner is None or c.owner == user.id:
+                    clone_card(c, partial(set_z, zs[i]))
+        for c in grabbed_cards:
             if c.owner is None:
                 c.owner = user.id
 
-        for c in droppedCards:
+        for c in dropped_cards:
             if c.owner == user.id:
                 c.owner = None
 
-        for c in flippedCards:
+        for c in flipped_cards:
             if c.owner is None or c.owner == user.id:
-                if c.details["facing"]:
-                    url = c.back
-                else:
-                    url = c.front
-                new_card = CardModel(
-                    details={
-                        "facing": not c.details["facing"],
-                        "rotation": c.details["rotation"],
-                        "name": c.details["name"]
-                    },
-                    x=c.x,
-                    y=c.y,
-                    front=c.front,
-                    back=c.back,
-                    url=url,
-                    updated_at=now(),
-                    owner=c.owner,
-                )
-                db.session().add(new_card)
-                db.session().delete(c)
-        for i, c in enumerate(updatedCards):
-            p = cardUpdates[i]
+                clone_card(c, flip_card)
+
+        for i, c in enumerate(updated_cards):
+            p = card_updates[i]
             updated = False
             if c.owner is None or c.owner == user.id:
                 if p.get("x", None):
