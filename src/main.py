@@ -11,6 +11,7 @@ from sqlalchemy.sql.functions import now
 from sqlalchemy.orm.attributes import flag_modified
 from werkzeug.utils import redirect
 from flask_wtf import FlaskForm
+from flask_wtf.csrf import CSRFProtect
 from wtforms import StringField
 from wtforms.validators import DataRequired
 from flask_sqlalchemy import SQLAlchemy
@@ -19,6 +20,9 @@ from argon2.exceptions import VerifyMismatchError
 
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY')
+
+csrf = CSRFProtect()
+csrf.init_app(app)
 
 
 def signed_in():
@@ -108,9 +112,8 @@ def status():
 @app.get('/current-user/cards')
 @auth
 def get_cards(user):
-    cards = db.session().query(CardModel).filter(or_(CardModel.owner == None, CardModel.owner == user.id)).order_by(CardModel.id).all()
     return jsonify({
-        'cards': getCards(user)
+        'cards': getCards(user),
     })
 
 
@@ -175,8 +178,8 @@ def update_cards(user):
     })
 
 
-@ app.get('/')
-@ auth
+@app.get('/')
+@auth
 def root(user):
     form = HomeForm()
     return render_template(
@@ -188,8 +191,8 @@ def root(user):
 
 
 if os.getenv('DEV_MODE') == 'true':
-    @ app.post('/log')
-    @ auth
+    @app.post('/log')
+    @auth
     def debug_log(user):
         app.logger.info(
             'from client: ' +
@@ -211,8 +214,8 @@ def check(hash, incoming_password):
     return False
 
 
-@ app.route("/sign-in", methods=['GET', 'POST'])
-@ no_auth
+@app.route("/sign-in", methods=['GET', 'POST'])
+@no_auth
 def sign_in_form():
     form = SignInForm()
     if form.validate_on_submit():
@@ -228,14 +231,14 @@ def sign_in_form():
     )
 
 
-@ app.get("/protected/<path:name>")
-@ auth
+@app.get("/protected/<path:name>")
+@auth
 def serve_static_protected(user, name):
     return send_from_directory('../static/protected/', name)
 
 
-@ app.get("/<path:name>")
-@ no_auth
+@app.get("/<path:name>")
+@no_auth
 def serve_static_public(name):
     try:
         return send_from_directory('../static/public/', name)
@@ -256,11 +259,4 @@ def request_log(response):
     return response
 
 
-def check_auth(response):
-    if not getattr(g, 'auth_handled', None):
-        raise Exception("No auth set for route", request, response)
-    return response
-
-
-app.after_request(check_auth)
 app.after_request(request_log)

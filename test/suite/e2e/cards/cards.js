@@ -65,7 +65,7 @@ describe("Cards", function () {
         const card4Id = await addTestCard("Card 4", userId)
 
 
-        const cookieJar = await cliSignIn(
+        const { cookieJar, csrf } = await cliSignIn(
             process.env.TEST_USERNAME,
             process.env.TEST_PASSWORD,
         )
@@ -89,7 +89,10 @@ describe("Cards", function () {
             })
         }, {
             jar: cookieJar,
-            withCredentials: true
+            withCredentials: true,
+            headers: {
+                'X-CSRF-TOKEN': csrf
+            }
         })
 
         const list = await axios.get("http://localhost:8080/current-user/cards", {
@@ -148,7 +151,7 @@ describe("Cards", function () {
         await addTestAdminUser(sequelize, process.env.TEST_USERNAME + "2", process.env.TEST_PASSWORD)
         const cardId = await addTestCard("Card 1")
 
-        const cookieJar = await cliSignIn(
+        const { cookieJar, csrf } = await cliSignIn(
             process.env.TEST_USERNAME,
             process.env.TEST_PASSWORD,
         )
@@ -165,7 +168,10 @@ describe("Cards", function () {
             ]
         }, {
             jar: cookieJar,
-            withCredentials: true
+            withCredentials: true,
+            headers: {
+                'X-CSRF-TOKEN': csrf
+            }
         })
 
         const response = await axios.get("http://localhost:8080/current-user/cards", {
@@ -175,7 +181,7 @@ describe("Cards", function () {
 
         expect(response.data.cards[0].y).to.eq(10)
 
-        const cookieJar2 = await cliSignIn(
+        const { cookieJar: cookieJar2 } = await cliSignIn(
             process.env.TEST_USERNAME + "2",
             process.env.TEST_PASSWORD,
         )
@@ -193,12 +199,12 @@ describe("Cards", function () {
         const userId2 = await addTestAdminUser(sequelize, process.env.TEST_USERNAME + "2", process.env.TEST_PASSWORD)
         const cardId = await addTestCard("Card 1", userId1)
 
-        const cookieJar = await cliSignIn(
+        const { cookieJar, csrf } = await cliSignIn(
             process.env.TEST_USERNAME,
             process.env.TEST_PASSWORD,
         )
 
-        const cookieJar2 = await cliSignIn(
+        const { cookieJar: cookieJar2, csrf: csrf2 } = await cliSignIn(
             process.env.TEST_USERNAME + "2",
             process.env.TEST_PASSWORD,
         )
@@ -216,7 +222,10 @@ describe("Cards", function () {
             ],
         }, {
             jar: cookieJar,
-            withCredentials: true
+            withCredentials: true,
+            headers: {
+                'X-CSRF-TOKEN': csrf
+            }
         })
 
         const response = await axios.get("http://localhost:8080/current-user/cards", {
@@ -235,7 +244,7 @@ describe("Cards", function () {
         await addTestCard("Card 2", userId)
         await addTestCard("Card 3", userId2)
 
-        const cookieJar = await cliSignIn(
+        const { cookieJar } = await cliSignIn(
             process.env.TEST_USERNAME,
             process.env.TEST_PASSWORD,
         )
@@ -268,8 +277,11 @@ async function cliSignIn(username, password) {
         password,
     }, {
         jar: cookieJar,
-        withCredentials: true
+        withCredentials: true,
+        headers: {
+            'X-CSRF-TOKEN': csrf
+        }
     })
 
-    return cookieJar
+    return { cookieJar, csrf }
 }
