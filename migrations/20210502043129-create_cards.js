@@ -12,6 +12,9 @@ module.exports = {
 					x integer not null,
 					y integer not null,
 					details jsonb not null,
+					back text,
+					front text,
+					url text,
 					enabled boolean default true,
 					updated_at timestamp not null
 				);

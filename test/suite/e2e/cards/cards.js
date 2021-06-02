@@ -14,7 +14,17 @@ axiosCookieJarSupport(axios);
 let browser
 let sequelize
 
-async function addTestCard(name, ownerId = null, x = 0, y = 0, rotation = 0, facing = false) {
+async function addTestCard(
+    name,
+    ownerId = null,
+    x = 0,
+    y = 0,
+    rotation = 0,
+    facing = false,
+    back = "back.jpg",
+    front = "facing.jpg"
+) {
+    const url = facing ? front : back
     const [rows] = await sequelize.query(`
             insert into cards
             (
@@ -22,7 +32,10 @@ async function addTestCard(name, ownerId = null, x = 0, y = 0, rotation = 0, fac
                 y,
                 details,
                 updated_at,
-                owner
+                owner,
+                back,
+                front,
+                url
             )
             values
             (
@@ -30,7 +43,10 @@ async function addTestCard(name, ownerId = null, x = 0, y = 0, rotation = 0, fac
                 $y,
                 $details,
                 now(),
-                $owner
+                $owner,
+                $back,
+                $front,
+                $url
             )
             returning id
         `, {
@@ -42,7 +58,10 @@ async function addTestCard(name, ownerId = null, x = 0, y = 0, rotation = 0, fac
                 rotation,
                 facing
             },
-            owner: ownerId
+            owner: ownerId,
+            back,
+            front,
+            url
         }
     })
     return rows[0].id
@@ -196,7 +215,7 @@ describe("Cards", function () {
 
     it('can drop a card', async () => {
         const userId1 = await addTestAdminUser(sequelize, process.env.TEST_USERNAME, process.env.TEST_PASSWORD)
-        const userId2 = await addTestAdminUser(sequelize, process.env.TEST_USERNAME + "2", process.env.TEST_PASSWORD)
+        await addTestAdminUser(sequelize, process.env.TEST_USERNAME + "2", process.env.TEST_PASSWORD)
         const cardId = await addTestCard("Card 1", userId1)
 
         const { cookieJar, csrf } = await cliSignIn(
@@ -234,6 +253,56 @@ describe("Cards", function () {
         })
 
         expect(response.data.cards.length).to.eq(1)
+    })
+
+    it('can flip a card', async () => {
+        await addTestAdminUser(sequelize, process.env.TEST_USERNAME, process.env.TEST_PASSWORD)
+        const cardId = await addTestCard(
+            "Card 1",
+            null, 0, 0, 0, false,
+            "initial-image.jpg",
+            "other-image.jpg"
+        )
+
+        const { cookieJar, csrf } = await cliSignIn(
+            process.env.TEST_USERNAME,
+            process.env.TEST_PASSWORD,
+        )
+
+        const initialCheck = await axios.get("http://localhost:8080/current-user/cards", {
+            jar: cookieJar,
+            withCredentials: true
+        })
+
+        expect(initialCheck.data.cards.length).to.eq(1)
+        expect(initialCheck.data.cards[0].details.facing).to.eq(false)
+        expect(initialCheck.data.cards[0].front).to.be.undefined
+        expect(initialCheck.data.cards[0].back).to.be.undefined
+        expect(initialCheck.data.cards[0].url).to.eq("initial-image.jpg")
+
+        const initialId = initialCheck.data.cards[0].id
+
+        await axios.post("http://localhost:8080/current-user/cards", {
+            cardFlips: [
+                cardId
+            ],
+        }, {
+            jar: cookieJar,
+            withCredentials: true,
+            headers: {
+                'X-CSRF-TOKEN': csrf
+            }
+        })
+
+        const response = await axios.get("http://localhost:8080/current-user/cards", {
+            jar: cookieJar,
+            withCredentials: true
+        })
+
+        expect(response.data.cards.length).to.eq(1)
+        expect(response.data.cards[0].details.facing).to.eq(true)
+        expect(response.data.cards[0].details.id).to.not.eq(initialId)
+        expect(response.data.cards[0].url).to.eq("other-image.jpg")
     })
 
     it('can list all the public cards, plus any cards owned by the current user', async function () {

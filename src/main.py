@@ -90,11 +90,15 @@ class CardModel(db.Model):
     details: Dict
     x: int
     y: int
+    url: str
 
     id = db.Column(db.Integer, primary_key=True)
     details = db.Column(db.JSON())
     x = db.Column(db.Integer())
     y = db.Column(db.Integer())
+    front = db.Column(db.Text())
+    back = db.Column(db.Text())
+    url = db.Column(db.Text())
     updated_at = db.Column(db.DateTime())
     owner = db.Column(db.ForeignKey(UserModel.id))
 
@@ -113,7 +117,7 @@ def status():
 @auth
 def get_cards(user):
     return jsonify({
-        'cards': getCards(user),
+        'cards': query_cards(user),
     })
 
 
@@ -121,10 +125,12 @@ def getId(cardUpdate):
     return cardUpdate["id"]
 
 
-def getCards(user, ids=None):
+def query_cards(user, ids=None):
     if ids is None:
-        return db.session().query(CardModel).filter(or_(CardModel.owner == None, CardModel.owner == user.id)).order_by(CardModel.id).all()
-    return db.session().query(CardModel).filter(CardModel.id.in_(ids)).filter(or_(CardModel.owner == None, CardModel.owner == user.id)).order_by(CardModel.id).all()
+        result = db.session().query(CardModel).filter(or_(CardModel.owner == None, CardModel.owner == user.id)).order_by(CardModel.id).all()
+    else:
+        result = db.session().query(CardModel).filter(CardModel.id.in_(ids)).filter(or_(CardModel.owner == None, CardModel.owner == user.id)).order_by(CardModel.id).all()
+    return result
 
 
 @app.post('/current-user/cards')
@@ -135,12 +141,19 @@ def update_cards(user):
 
     grabbedIds = sorted(request.json.get("cardGrabs", []))
     droppedIds = sorted(request.json.get("cardDrops", []))
+    flippedIds = sorted(request.json.get("cardFlips", []))
 
-    updatedCards = getCards(user, cardIds)
-    grabbedCards = getCards(user, grabbedIds)
-    droppedCards = getCards(user, droppedIds)
+    updatedCards = query_cards(user, cardIds)
+    grabbedCards = query_cards(user, grabbedIds)
+    droppedCards = query_cards(user, droppedIds)
+    flippedCards = query_cards(user, flippedIds)
 
-    if len(updatedCards) or len(grabbedCards) or len(droppedCards):
+    if (
+        len(updatedCards) or
+        len(grabbedCards) or
+        len(droppedCards) or
+        len(flippedCards)
+    ):
         for c in grabbedCards:
             if c.owner is None:
                 c.owner = user.id
@@ -149,25 +162,48 @@ def update_cards(user):
             if c.owner == user.id:
                 c.owner = None
 
+        for c in flippedCards:
+            if c.owner is None or c.owner == user.id:
+                if c.details["facing"]:
+                    url = c.back
+                else:
+                    url = c.front
+                new_card = CardModel(
+                    details={
+                        "facing": not c.details["facing"],
+                        "rotation": c.details["rotation"],
+                        "name": c.details["name"]
+                    },
+                    x=c.x,
+                    y=c.y,
+                    front=c.front,
+                    back=c.back,
+                    url=url,
+                    updated_at=now(),
+                    owner=c.owner,
+                )
+                db.session().add(new_card)
+                db.session().delete(c)
         for i, c in enumerate(updatedCards):
             p = cardUpdates[i]
             updated = False
-            if p.get("x", None):
-                c.x = p["x"]
-                updated = True
-            if p.get("y", None):
-                c.y = p["y"]
-                updated = True
-            if p.get("details", None):
-                details = p["details"]
-                if details.get("rotation", None):
-                    c.details["rotation"] = details["rotation"]
-                    flag_modified(c, "details")
+            if c.owner is None or c.owner == user.id:
+                if p.get("x", None):
+                    c.x = p["x"]
                     updated = True
-                if details.get("facing", None):
-                    c.details["facing"] = details["facing"]
-                    flag_modified(c, "details")
+                if p.get("y", None):
+                    c.y = p["y"]
                     updated = True
+                if p.get("details", None):
+                    details = p["details"]
+                    if details.get("rotation", None):
+                        c.details["rotation"] = details["rotation"]
+                        flag_modified(c, "details")
+                        updated = True
+                    if details.get("facing", None):
+                        c.details["facing"] = details["facing"]
+                        flag_modified(c, "details")
+                        updated = True
 
             if updated:
                 c.updated_at = now()
