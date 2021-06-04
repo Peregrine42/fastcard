@@ -6,7 +6,7 @@ module.exports = (env) => {
         mode: env.development ? "development" : "production",
         devtool: env.development ? "eval-cheap-module-source-map" : undefined,
         entry: {
-            main: "./client/app.ts",
+            main: "./client/app.tsx",
             signIn: "./client/signIn.ts"
         },
         output: {

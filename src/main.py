@@ -220,20 +220,24 @@ def update_cards(user):
             p = card_updates[i]
             updated = False
             if c.owner is None or c.owner == user.id:
-                if p.get("x", None):
+                if p.get("x", None) is not None:
                     c.x = p["x"]
                     updated = True
-                if p.get("y", None):
+                if p.get("y", None) is not None:
                     c.y = p["y"]
                     updated = True
-                if p.get("details", None):
+                if p.get("details", None) is not None:
                     details = p["details"]
-                    if details.get("rotation", None):
+                    if details.get("rotation", None) is not None:
                         c.details["rotation"] = details["rotation"]
                         flag_modified(c, "details")
                         updated = True
-                    if details.get("facing", None):
+                    if details.get("facing", None) is not None:
                         c.details["facing"] = details["facing"]
+                        flag_modified(c, "details")
+                        updated = True
+                    if details.get("z", None) is not None:
+                        c.details["z"] = details["z"]
                         flag_modified(c, "details")
                         updated = True
 
