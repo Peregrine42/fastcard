@@ -19,6 +19,7 @@ from wtforms.validators import DataRequired
 from flask_sqlalchemy import SQLAlchemy
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
+from flask_socketio import SocketIO
 
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY')
@@ -216,6 +217,7 @@ def update_cards(user):
             if c.owner is None or c.owner == user.id:
                 clone_card(c, flip_card)
 
+        done_card_updates = []
         for i, c in enumerate(updated_cards):
             p = card_updates[i]
             updated = False
@@ -223,9 +225,17 @@ def update_cards(user):
                 if p.get("x", None) is not None:
                     c.x = p["x"]
                     updated = True
+                    done_card_updates.append({
+                        "id": c.id,
+                        "x": c.x
+                    })
                 if p.get("y", None) is not None:
                     c.y = p["y"]
                     updated = True
+                    done_card_updates.append({
+                        "id": c.id,
+                        "y": c.y
+                    })
                 if p.get("details", None) is not None:
                     details = p["details"]
                     if details.get("rotation", None) is not None:
@@ -245,6 +255,10 @@ def update_cards(user):
                 c.updated_at = now()
         db.session().commit()
 
+        if len(done_card_updates):
+            print(done_card_updates)
+            socketio.emit('cardUpdate', {'fromUserId': user.id, 'cardUpdates': done_card_updates})
+
     return jsonify({
         'success': True
     })
@@ -257,6 +271,7 @@ def root(user):
     return render_template(
         'home.html.j2',
         username=user.username,
+        user_id=user.id,
         form=form,
         success=get_flashed_messages(category_filter='success')
     )
@@ -332,3 +347,8 @@ def request_log(response):
 
 
 app.after_request(request_log)
+
+socketio = SocketIO(app)
+
+if __name__ == '__main__':
+    socketio.run(app, host="localhost", port=8080)

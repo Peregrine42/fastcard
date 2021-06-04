@@ -1,8 +1,9 @@
 import axios from "axios"
 import { serializeError } from "serialize-error"
 import ReactDOM from "react-dom"
-import React, { useEffect, useState } from "react"
+import React, { useCallback, useEffect, useRef, useState } from "react"
 import update from 'immutability-helper'
+import { io, Socket } from 'socket.io-client'
 
 const log = async (...args: any[]) => {
     console.log(...args)
@@ -44,27 +45,61 @@ class Card {
     }
 }
 
-const Board = ({ csrf }: { csrf: string }) => {
-    const [cards, setCards] = useState<Card[]>([])
+const Board = ({ userId, csrf, socket }: { userId: number, csrf: string, socket: Socket }) => {
+    const [cards, setCards] = useState<any>({})
+    const cardsRef = useRef<any>(cards)
+    const [cardsSortedByZ, setCardsSortedByZ] = useState<any>([])
 
     const [draggingCardId, setDraggingCardId] = useState<number | null>(null);
     const [offset, setOffset] = useState<[x: number, y: number]>([0, 0]);
     const [isDown, setIsDown] = useState<boolean>(false);
 
+    useEffect(() => {
+        cardsRef.current = cards;
+    }, [cards]);
+
     // initial load
     useEffect(() => {
         const init = async () => {
+            const cardUpdateCallback = ({ fromUserId, cardUpdates: newStates }: { fromUserId: number, cardUpdates: any }) => {
+                // if (fromUserId === userId) return
+                const command: any = {}
+                newStates.forEach((s: any) => {
+                    if (s.id) {
+                        const card = cardsRef.current[s.id]
+                        if (card) {
+                            if (typeof (command[card.id]) === "undefined") {
+                                command[card.id] = {}
+                            }
+
+                            if (typeof (s.x) !== "undefined") {
+                                command[card.id]["x"] = {
+                                    $set: s.x
+                                }
+                            }
+                            if (typeof (s.y) !== "undefined") {
+                                command[card.id]["y"] = {
+                                    $set: s.y
+                                }
+                            }
+                        }
+                    }
+                })
+
+                const newCards = update(cardsRef.current, command)
+                setCards(newCards)
+            }
+
+            socket.on('cardUpdate', cardUpdateCallback)
+
             const initialCardsResponse = await axios.get("/current-user/cards")
             const initialCards = [...initialCardsResponse.data.cards] as ServerCard[]
-            const cards = initialCards.map(c => new Card(c))
-            cards.sort((a, b) => {
-                if (a.z > b.z) {
-                    return 1
-                } else {
-                    return -1
-                }
-            })
-            setCards(cards)
+            const cs = initialCards.map(c => new Card(c))
+
+            const cardsById: any = {}
+            cs.forEach(c => cardsById[c.id] = c)
+
+            setCards(cardsById)
         }
         init()
     }, [])
@@ -78,34 +113,37 @@ const Board = ({ csrf }: { csrf: string }) => {
         setDraggingCardId(c.id)
     }
 
-    const mouseUp = (_e: React.MouseEvent<HTMLDivElement, MouseEvent>) => {
+    const mouseUp = async (_e: React.MouseEvent<HTMLDivElement, MouseEvent>) => {
+        if (!isDown) return
         setIsDown(false);
 
-        const card = cards.find(c => c.id === draggingCardId)
+        if (draggingCardId) {
+            const card = cards[draggingCardId]
 
-        if (card) {
-            axios.post("/current-user/cards", {
-                cardUpdates: [
-                    {
-                        id: draggingCardId,
-                        x: card.x,
-                        y: card.y
+            if (card) {
+                await axios.post("/current-user/cards", {
+                    cardUpdates: [
+                        {
+                            id: draggingCardId,
+                            x: card.x,
+                            y: card.y
+                        }
+                    ]
+                }, {
+                    headers: {
+                        'X-CSRF-TOKEN': csrf
                     }
-                ]
-            }, {
-                headers: {
-                    'X-CSRF-TOKEN': csrf
-                }
-            })
+                })
+            }
         }
     }
 
-    const mouseMove = (e: React.MouseEvent<HTMLDivElement, MouseEvent>) => {
+    const mouseMove = async (e: React.MouseEvent<HTMLDivElement, MouseEvent>) => {
         e.preventDefault();
-        if (isDown) {
-            const index = cards.findIndex(card => card.id === draggingCardId)
+        if (isDown && draggingCardId) {
+            const card = cards[draggingCardId]
             const command: any = {}
-            command[index] = {
+            command[card.id] = {
                 x: {
                     $set: (e.clientX + offset[0])
                 },
@@ -114,27 +152,33 @@ const Board = ({ csrf }: { csrf: string }) => {
                 }
             }
             const movedCards = update(cards, command)
-            const card = movedCards[index]
-            const restackedCards = update(movedCards, {
-                $splice: [[index, 1]],
-                $push: [card]
-            })
 
             const zChanges: any = {}
-            restackedCards.forEach((c, i) => {
-                if (c.z !== i) {
-                    zChanges[i] = {
+            const cardList = Object.values(movedCards)
+            cardList.forEach((c: any) => {
+                if (c.id === card.id) {
+                    if (c.z !== cardList.length - 1) {
+                        zChanges[c.id] = {
+                            z: {
+                                $set: cardList.length - 1
+                            }
+                        }
+                    }
+                } else if (c.z <= card.z) {
+                    return
+                } else if (c.z > card.z) {
+                    zChanges[c.id] = {
                         z: {
-                            $set: i
+                            $set: c.z - 1
                         }
                     }
                 }
             })
-            const zCards = update(restackedCards, zChanges)
+            const zCards = update(movedCards, zChanges)
             setCards(zCards)
 
             const updates = Object.keys(zChanges).map((index) => {
-                const card = zCards[parseInt(index)]
+                const card = zCards[index]
                 return {
                     id: card.id,
                     details: {
@@ -144,7 +188,7 @@ const Board = ({ csrf }: { csrf: string }) => {
             })
 
             if (updates.length > 0) {
-                axios.post("/current-user/cards", {
+                await axios.post("/current-user/cards", {
                     cardUpdates: updates
                 }, {
                     headers: {
@@ -155,6 +199,18 @@ const Board = ({ csrf }: { csrf: string }) => {
         }
     }
 
+    useEffect(() => {
+        const cs = Object.values(cards)
+        cs.sort((a: any, b: any) => {
+            if (a.z > b.z) {
+                return 1
+            } else {
+                return -1
+            }
+        })
+        setCardsSortedByZ(cs)
+    }, [cards])
+
     return (
         <div
             className="view"
@@ -163,7 +219,7 @@ const Board = ({ csrf }: { csrf: string }) => {
         >
             {
                 (() => {
-                    return cards.map((c) => {
+                    return cardsSortedByZ.map((c: any) => {
                         return (
                             <div
                                 style={{ top: c.y + "px", left: c.x + "px" }}
@@ -184,11 +240,24 @@ const Board = ({ csrf }: { csrf: string }) => {
 const initApp = async () => {
     await new Promise(res => window.addEventListener("load", res))
 
-    const el = document.getElementById("csrf_token") as HTMLElement
-    const csrf = el.getAttribute("value") || ""
+    const csrfEl = document.getElementById("csrf_token") as HTMLElement
+    const csrf = csrfEl.getAttribute("value") || ""
+
+    const userIdEl = document.getElementById("user_id") as HTMLElement
+    const userId = userIdEl.getAttribute("value") || null
+
+    if (userId === null) {
+        throw Error("No user ID!")
+    }
+
+    const socket = io()
+
+    socket.on("connect", () => {
+        console.log("Connected!")
+    })
 
     ReactDOM.render(
-        <Board csrf={csrf} />,
+        <Board userId={parseInt(userId)} csrf={csrf} socket={socket} />,
         document.getElementById('view')
     );
 }

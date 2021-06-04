@@ -4,5 +4,6 @@
 {% set title = "Home" %}
 {% block body %}
     {{ form.csrf_token }}
+    <input id="user_id" type="hidden" value="{{user_id}}"/>
     <div id="view"></div>
 {% endblock %}
