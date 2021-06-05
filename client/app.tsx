@@ -3,7 +3,7 @@ import { serializeError } from "serialize-error"
 import update from 'immutability-helper'
 import { io, Socket } from 'socket.io-client'
 import m, { Vnode, VnodeDOM } from "mithril"
-import panzoom from "panzoom"
+import panzoom, { PanZoom } from "panzoom"
 import classnames from "classnames"
 
 const log = async (...args: any[]) => {
@@ -55,8 +55,10 @@ class Board {
     offset: [number, number]
     isDown: boolean
     cs: any[]
-    pz?: any
+    pz?: PanZoom
     shouldPanZoom: boolean
+    panning: boolean
+    angle: number
 
     constructor(_vnode: Vnode) {
         this.cards = {}
@@ -65,6 +67,8 @@ class Board {
         this.offset = [0, 0]
         this.isDown = false
         this.shouldPanZoom = false
+        this.panning = false
+        this.angle = 0
     }
 
     onupdate(vnode: VnodeDOM<{ shouldPanZoom: boolean }>) {
@@ -78,12 +82,44 @@ class Board {
         }
     }
 
+    stringifyTransform(transform: any, angle: number) {
+        if (transform) {
+            return `${transform.x},${transform.y},${transform.scale},${angle}`
+        } else {
+            return `${angle}`
+        }
+    }
+
+    parseTransform(string?: string) {
+        if (string) {
+            const parts = string.split(",")
+            if (parts.length === 4) {
+                const [x, y, scale, angle] = string.split(",").map(part => parseFloat(part))
+                return { x, y, scale, angle }
+            }
+        }
+        return { x: 0, y: 0, scale: 1, angle: 0 }
+    }
+
     async oncreate(vnode: VnodeDOM<{ shouldPanZoom: boolean }>) {
         const dom = vnode.dom as HTMLElement
         if (dom && dom.children[0]) {
+            const { x, y, scale, angle } = this.parseTransform(window.location.hash.slice(1))
+
+            this.angle = angle
+
             this.pz = panzoom(dom.children[0] as HTMLElement, {
-                smoothScroll: false
+                smoothScroll: false,
+                initialX: x,
+                initialY: y,
+                initialZoom: scale
             })
+
+            this.pz.moveTo(x, y)
+
+            this.pz.on("transform", throttle(() => {
+                window.location.hash = this.stringifyTransform(this.pz?.getTransform(), this.angle)
+            }, 300))
         }
 
         const cardUpdateCallback = ({ fromUserId, cardUpdates: newStates }: { fromUserId: number, cardUpdates: any }) => {
@@ -95,15 +131,16 @@ class Board {
                         if (typeof (command[card.id]) === "undefined") {
                             command[card.id] = {}
                         }
-
-                        if (typeof (s.x) !== "undefined") {
+                        if (
+                            typeof (s.x) !== "undefined" &&
+                            typeof (s.y) !== "undefined"
+                        ) {
+                            const [x, y] = rotate(0, 0, s.x, s.y, this.angle)
                             command[card.id]["x"] = {
-                                $set: s.x
+                                $set: x
                             }
-                        }
-                        if (typeof (s.y) !== "undefined") {
                             command[card.id]["y"] = {
-                                $set: s.y
+                                $set: y
                             }
                         }
                         if (typeof (s.z) !== "undefined") {
@@ -144,7 +181,12 @@ class Board {
 
         const initialCardsResponse = await axios.get("/current-user/cards")
         const initialCards = [...initialCardsResponse.data.cards] as ServerCard[]
-        const cs = initialCards.map(c => new Card(c))
+        const cs = initialCards.map(c => {
+            const [x, y] = rotate(0, 0, c.x, c.y, this.angle)
+            c.x = x
+            c.y = y
+            return new Card(c)
+        })
 
         const cardsById: any = {}
         cs.forEach(c => cardsById[c.id] = c)
@@ -166,18 +208,38 @@ class Board {
         })
     }
 
-    mouseDownFor(c: Card, e: MouseEvent) {
+    mouseDownFor(
+        c: Card,
+        e: {
+            stopImmediatePropagation: () => void,
+            preventDefault: () => void,
+            target: HTMLElement,
+            clientX: number,
+            clientY: number
+        }
+    ) {
         if (this.shouldPanZoom) return
         e.stopImmediatePropagation()
         this.isDown = true
+        let transform = { scale: 1, x: 0, y: 0 }
+        if (this.pz) {
+            transform = this.pz.getTransform()
+        }
         this.offset = [
-            (e.target as HTMLElement).offsetLeft - e.clientX,
-            (e.target as HTMLElement).offsetTop - e.clientY
+            (e.target).offsetLeft - (e.clientX / transform.scale),
+            (e.target).offsetTop - (e.clientY / transform.scale)
         ]
         this.draggingCardId = c.id
     }
 
-    async mouseUp(e: MouseEvent) {
+    async mouseUp(
+        e: {
+            stopImmediatePropagation: () => void,
+            preventDefault: () => void,
+            clientX: number,
+            clientY: number
+        }
+    ) {
         if (this.shouldPanZoom) return
         e.stopImmediatePropagation()
         if (!this.isDown) return
@@ -187,12 +249,14 @@ class Board {
             const card = this.cards[this.draggingCardId]
 
             if (card) {
+                const [x, y] = rotate(0, 0, card.x, card.y, -this.angle)
+
                 await axios.post("/current-user/cards", {
                     cardUpdates: [
                         {
                             id: this.draggingCardId,
-                            x: card.x,
-                            y: card.y
+                            x: x,
+                            y: y
                         }
                     ]
                 }, {
@@ -205,19 +269,35 @@ class Board {
         }
     }
 
-    async mouseMove(e: MouseEvent) {
+    async mouseMove(
+        e: {
+            stopImmediatePropagation: () => void,
+            preventDefault: () => void,
+            clientX: number,
+            clientY: number
+        }
+    ) {
         if (this.shouldPanZoom) return
         e.stopImmediatePropagation()
         e.preventDefault();
         if (this.isDown && this.draggingCardId) {
             const card = this.cards[this.draggingCardId]
             const command: any = {}
+            let transform = { scale: 1, x: 0, y: 0 }
+            if (this.pz) {
+                transform = this.pz.getTransform()
+            }
+            const newX = ((e.clientX) / transform.scale) + this.offset[0]
+            const newY = ((e.clientY) / transform.scale) + this.offset[1]
+
+            const [x, y] = [newX, newY]
+
             command[card.id] = {
                 x: {
-                    $set: (e.clientX + this.offset[0])
+                    $set: x
                 },
                 y: {
-                    $set: (e.clientY + this.offset[1])
+                    $set: y
                 }
             }
             const movedCards = update(this.cards, command)
@@ -275,6 +355,20 @@ class Board {
                 className="view"
                 onmousemove={(e: MouseEvent) => this.mouseMove(e)}
                 onmouseup={(e: MouseEvent) => this.mouseUp(e)}
+                ontouchmove={(e: TouchEvent) => {
+                    this.mouseMove({
+                        clientX: e.touches[0]?.clientX || 0,
+                        clientY: e.touches[0]?.clientY || 0,
+                        stopImmediatePropagation: e.stopImmediatePropagation.bind(e),
+                        preventDefault: e.preventDefault.bind(e)
+                    })
+                }}
+                ontouchend={(e: TouchEvent) => this.mouseUp({
+                    clientX: e.touches[0]?.clientX || 0,
+                    clientY: e.touches[0]?.clientY || 0,
+                    stopImmediatePropagation: e.stopImmediatePropagation.bind(e),
+                    preventDefault: e.preventDefault.bind(e)
+                })}
             >
                 <div id="view-container">
                     {
@@ -282,17 +376,27 @@ class Board {
                             return this.cs.map((c: any) => {
                                 return (
                                     <div
-                                        style={{ top: c.y + "px", left: c.x + "px" }}
+                                        style={{
+                                            transform: `translate(-50%, -50%) rotate(${-this.angle}deg)`,
+                                            top: c.y + "px",
+                                            left: c.x + "px"
+                                        }}
                                         className={classnames({
                                             "card": true,
                                             "card-transition": (
-                                                !this.shouldPanZoom &&
-                                                !this.draggingCardId === c.id
-                                            ),
-                                            "panzoom-exclude": !this.shouldPanZoom
+                                                !(this.panning) &&
+                                                !(this.draggingCardId === c.id)
+                                            )
                                         })}
                                         key={c.id}
                                         onmousedown={(e: MouseEvent) => this.mouseDownFor(c, e)}
+                                        ontouchstart={(e: TouchEvent) => this.mouseDownFor(c, {
+                                            clientX: e.touches[0]?.clientX || 0,
+                                            clientY: e.touches[0]?.clientY || 0,
+                                            stopImmediatePropagation: e.stopImmediatePropagation.bind(e),
+                                            preventDefault: e.preventDefault.bind(e),
+                                            target: e.touches[0]?.target as HTMLElement
+                                        })}
                                     >
                                         {c.id}
                                     </div>
@@ -322,7 +426,7 @@ class App {
                     <Board shouldPanZoom={this.shouldPanZoom}></Board>
                 </div>
                 <button
-                    onclick={(e) => {
+                    onclick={(e: MouseEvent) => {
                         e.stopImmediatePropagation()
                         this.shouldPanZoom = !this.shouldPanZoom
                     }}
@@ -342,6 +446,33 @@ class App {
         )
     }
 }
+
+function throttle(func: any, timeFrame: number) {
+    let lastTime = 0;
+    let interval: any = null;
+    return function () {
+        const now = Date.now();
+        if (now - lastTime >= timeFrame) {
+            func();
+            lastTime = now;
+        } else {
+            if (interval) {
+                clearTimeout(interval)
+            }
+            interval = setTimeout(func, timeFrame)
+        }
+    };
+}
+
+function rotate(cx: number, cy: number, x: number, y: number, angle: number) {
+    const radians = (Math.PI / 180) * angle,
+        cos = Math.cos(radians),
+        sin = Math.sin(radians),
+        nx = (cos * (x - cx)) + (sin * (y - cy)) + cx,
+        ny = (cos * (y - cy)) - (sin * (x - cx)) + cy;
+    return [nx, ny];
+}
+
 
 const initApp = async () => {
     await new Promise(res => window.addEventListener("load", res))

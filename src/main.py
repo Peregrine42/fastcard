@@ -222,19 +222,14 @@ def update_cards(user):
             p = card_updates[i]
             updated = False
             if c.owner is None or c.owner == user.id:
-                if p.get("x", None) is not None:
+                if p.get("x", None) is not None and p.get("y", None) is not None:
                     c.x = p["x"]
-                    updated = True
-                    done_card_updates.append({
-                        "id": c.id,
-                        "x": c.x
-                    })
-                if p.get("y", None) is not None:
                     c.y = p["y"]
                     updated = True
                     done_card_updates.append({
                         "id": c.id,
-                        "y": c.y
+                        "x": c.x,
+                        "y": c.y,
                     })
                 if p.get("details", None) is not None:
                     details = p["details"]

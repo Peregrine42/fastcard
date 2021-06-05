@@ -36,7 +36,6 @@
         "chai-subset": "^1.6.0",
         "execa": "^5.0.0",
         "fkill": "^7.1.1",
-        "fork-ts-checker-webpack-plugin": "^6.2.10",
         "geckodriver": "^1.22.3",
         "mocha": "^6.2.3",
         "pg": "^8.6.0",
@@ -53,7 +52,6 @@
     },
     "dependencies": {
         "@babel/runtime": "^7.14.0",
-        "@panzoom/panzoom": "^4.4.0",
         "axios": "^0.21.1",
         "axios-cookiejar-support": "^1.0.1",
         "classnames": "^2.3.1",
@@ -61,10 +59,8 @@
         "immutability-helper": "^3.1.1",
         "mithril": "^2.0.4",
         "node-html-parser": "^3.3.4",
-        "nudged": "^1.5.0",
         "panzoom": "^9.4.2",
-        "react": "^17.0.2",
-        "react-dom": "^17.0.2",
+        "nudged": "^1.5.0",
         "serialize-error": "^8.1.0",
         "socket.io-client": "^4.1.2",
         "tough-cookie": "^4.0.0"

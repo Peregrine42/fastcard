@@ -34,12 +34,10 @@ body {
     position: absolute;
     width: 100%;
     height: 100%;
-    background-color: red;
 }
 
 #view-pane {
     position: absolute;
-    background-color: orange;
     width: 100%;
     height: 100%;
 }
