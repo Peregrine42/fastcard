@@ -355,4 +355,8 @@ app.after_request(request_log)
 socketio = SocketIO(app)
 
 if __name__ == '__main__':
-    socketio.run(app, host="localhost", port=8080)
+    if os.getenv("DEV_MODE"):
+        host = "0.0.0.0"
+    else:
+        host = "localhost"
+    socketio.run(app, host=host, port=8080)

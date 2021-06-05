@@ -2,7 +2,9 @@ import axios from "axios"
 import { serializeError } from "serialize-error"
 import update from 'immutability-helper'
 import { io, Socket } from 'socket.io-client'
-import m, { Vnode } from "mithril"
+import m, { Vnode, VnodeDOM } from "mithril"
+import panzoom from "panzoom"
+import classnames from "classnames"
 
 const log = async (...args: any[]) => {
     console.log(...args)
@@ -53,16 +55,37 @@ class Board {
     offset: [number, number]
     isDown: boolean
     cs: any[]
+    pz?: any
+    shouldPanZoom: boolean
 
-    constructor(vnode: Vnode) {
+    constructor(_vnode: Vnode) {
         this.cards = {}
         this.cs = []
         this.draggingCardId = null
         this.offset = [0, 0]
         this.isDown = false
+        this.shouldPanZoom = false
     }
 
-    async oncreate() {
+    onupdate(vnode: VnodeDOM<{ shouldPanZoom: boolean }>) {
+        this.shouldPanZoom = vnode.attrs.shouldPanZoom
+        if (this.pz) {
+            if (this.shouldPanZoom) {
+                this.pz.resume()
+            } else {
+                this.pz.pause()
+            }
+        }
+    }
+
+    async oncreate(vnode: VnodeDOM<{ shouldPanZoom: boolean }>) {
+        const dom = vnode.dom as HTMLElement
+        if (dom && dom.children[0]) {
+            this.pz = panzoom(dom.children[0] as HTMLElement, {
+                smoothScroll: false
+            })
+        }
+
         const cardUpdateCallback = ({ fromUserId, cardUpdates: newStates }: { fromUserId: number, cardUpdates: any }) => {
             const command: any = {}
             newStates.forEach((s: any) => {
@@ -144,6 +167,8 @@ class Board {
     }
 
     mouseDownFor(c: Card, e: MouseEvent) {
+        if (this.shouldPanZoom) return
+        e.stopImmediatePropagation()
         this.isDown = true
         this.offset = [
             (e.target as HTMLElement).offsetLeft - e.clientX,
@@ -152,7 +177,9 @@ class Board {
         this.draggingCardId = c.id
     }
 
-    async mouseUp(_e: MouseEvent) {
+    async mouseUp(e: MouseEvent) {
+        if (this.shouldPanZoom) return
+        e.stopImmediatePropagation()
         if (!this.isDown) return
         this.isDown = false
 
@@ -174,10 +201,13 @@ class Board {
                     }
                 })
             }
+            this.draggingCardId = null
         }
     }
 
     async mouseMove(e: MouseEvent) {
+        if (this.shouldPanZoom) return
+        e.stopImmediatePropagation()
         e.preventDefault();
         if (this.isDown && this.draggingCardId) {
             const card = this.cards[this.draggingCardId]
@@ -241,26 +271,73 @@ class Board {
     view() {
         return (
             <div
+                id="view-pane"
                 className="view"
-                onmouseup={(e: MouseEvent) => this.mouseUp(e)}
                 onmousemove={(e: MouseEvent) => this.mouseMove(e)}
+                onmouseup={(e: MouseEvent) => this.mouseUp(e)}
             >
-                {
-                    (() => {
-                        return this.cs.map((c: any) => {
-                            return (
-                                <div
-                                    style={{ top: c.y + "px", left: c.x + "px" }}
-                                    className={`card ${c.id !== this.draggingCardId ? "card-transition" : ""}`}
-                                    key={c.id}
-                                    onmousedown={(e: MouseEvent) => this.mouseDownFor(c, e)}
-                                >
-                                    {c.id}
-                                </div>
-                            )
-                        })
-                    })()
-                }
+                <div id="view-container">
+                    {
+                        (() => {
+                            return this.cs.map((c: any) => {
+                                return (
+                                    <div
+                                        style={{ top: c.y + "px", left: c.x + "px" }}
+                                        className={classnames({
+                                            "card": true,
+                                            "card-transition": (
+                                                !this.shouldPanZoom &&
+                                                !this.draggingCardId === c.id
+                                            ),
+                                            "panzoom-exclude": !this.shouldPanZoom
+                                        })}
+                                        key={c.id}
+                                        onmousedown={(e: MouseEvent) => this.mouseDownFor(c, e)}
+                                    >
+                                        {c.id}
+                                    </div>
+                                )
+                            })
+                        })()
+                    }
+                </div>
+            </div>
+        )
+    }
+}
+
+class App {
+    shouldPanZoom: boolean
+    fullscreen: boolean
+
+    constructor(vnode: Vnode) {
+        this.shouldPanZoom = false
+        this.fullscreen = false
+    }
+
+    view() {
+        return (
+            <div>
+                <div id="view-inner">
+                    <Board shouldPanZoom={this.shouldPanZoom}></Board>
+                </div>
+                <button
+                    onclick={(e) => {
+                        e.stopImmediatePropagation()
+                        this.shouldPanZoom = !this.shouldPanZoom
+                    }}
+                >
+                    Pan/Zoom
+                </button>
+                <button style={{ bottom: "0px" }} onclick={() => {
+                    if (this.fullscreen) {
+                        document.exitFullscreen()
+                        this.fullscreen = false
+                    } else {
+                        document.body.requestFullscreen()
+                        this.fullscreen = true
+                    }
+                }}>Fullscreen</button>
             </div>
         )
     }
@@ -271,7 +348,7 @@ const initApp = async () => {
 
     m.mount(
         document.getElementById('view') as HTMLElement,
-        Board
+        App
     );
 }
 
