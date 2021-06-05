@@ -250,6 +250,10 @@ def update_cards(user):
                         c.details["z"] = details["z"]
                         flag_modified(c, "details")
                         updated = True
+                        done_card_updates.append({
+                            "id": c.id,
+                            "z": c.details["z"]
+                        })
 
             if updated:
                 c.updated_at = now()
