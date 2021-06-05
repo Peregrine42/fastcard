@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "jsx": "react",
+    "jsx": "preserve",
     /* Visit https://aka.ms/tsconfig.json to read more about this file */
     /* Basic Options */
     // "incremental": true,                         /* Enable incremental compilation */
