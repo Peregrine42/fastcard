@@ -105,6 +105,7 @@ class Board {
 
         this.pz = panzoom(child as HTMLElement, {
             smoothScroll: false,
+            zoomDoubleClickSpeed: 1,
             initialX: x,
             initialY: y,
             initialZoom: scale
