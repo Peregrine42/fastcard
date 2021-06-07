@@ -36,12 +36,16 @@ class Card {
     x: number
     y: number
     z: number
+    realX: number
+    realY: number
 
     constructor(c: ServerCard) {
         this.id = c.id
         this.name = c.details.name || "Untitled Card"
         this.x = c.x
         this.y = c.y
+        this.realX = c.x
+        this.realY = c.y
         this.z = c.details.z || 0
     }
 }
@@ -59,6 +63,7 @@ class Board {
     shouldPanZoom: boolean
     panning: boolean
     angle: number
+    fullscreen: boolean
 
     constructor(_vnode: Vnode) {
         this.cards = {}
@@ -69,22 +74,12 @@ class Board {
         this.shouldPanZoom = false
         this.panning = false
         this.angle = 0
-    }
-
-    onupdate(vnode: VnodeDOM<{ shouldPanZoom: boolean }>) {
-        this.shouldPanZoom = vnode.attrs.shouldPanZoom
-        if (this.pz) {
-            if (this.shouldPanZoom) {
-                this.pz.resume()
-            } else {
-                this.pz.pause()
-            }
-        }
+        this.fullscreen = false
     }
 
     stringifyTransform(transform: any, angle: number) {
         if (transform) {
-            return `${transform.x},${transform.y},${transform.scale},${angle}`
+            return `${transform.x},${transform.y},${transform.scale},${angle % 360}`
         } else {
             return `${angle}`
         }
@@ -103,24 +98,27 @@ class Board {
 
     async oncreate(vnode: VnodeDOM<{ shouldPanZoom: boolean }>) {
         const dom = vnode.dom as HTMLElement
-        if (dom && dom.children[0]) {
-            const { x, y, scale, angle } = this.parseTransform(window.location.hash.slice(1))
+        const child = dom.getElementsByClassName("view-container")[0] as HTMLElement
+        const { x, y, scale, angle } = this.parseTransform(window.location.hash.slice(1))
 
-            this.angle = angle
+        this.angle = angle
 
-            this.pz = panzoom(dom.children[0] as HTMLElement, {
-                smoothScroll: false,
-                initialX: x,
-                initialY: y,
-                initialZoom: scale
-            })
+        this.pz = panzoom(child as HTMLElement, {
+            smoothScroll: false,
+            initialX: x,
+            initialY: y,
+            initialZoom: scale
+        })
 
-            this.pz.moveTo(x, y)
+        this.pz.moveTo(x, y)
 
-            this.pz.on("transform", throttle(() => {
-                window.location.hash = this.stringifyTransform(this.pz?.getTransform(), this.angle)
-            }, 300))
+        if (!this.shouldPanZoom) {
+            this.pz.pause()
         }
+
+        this.pz.on("transform", throttle(() => {
+            window.location.hash = this.stringifyTransform(this.pz?.getTransform(), this.angle)
+        }, 300))
 
         const cardUpdateCallback = ({ fromUserId, cardUpdates: newStates }: { fromUserId: number, cardUpdates: any }) => {
             const command: any = {}
@@ -135,7 +133,14 @@ class Board {
                             typeof (s.x) !== "undefined" &&
                             typeof (s.y) !== "undefined"
                         ) {
-                            const [x, y] = rotate(0, 0, s.x, s.y, this.angle)
+                            const { x: camX, y: camY, scale } = this.pz?.getTransform() || { x: 0, y: 0, scale: 1 }
+                            const [x, y] = rotate((innerWidth / 2 - camX) / scale, (innerHeight / 2 - camY) / scale, s.x, s.y, this.angle)
+                            command[card.id]["realX"] = {
+                                $set: s.x
+                            }
+                            command[card.id]["realY"] = {
+                                $set: s.y
+                            }
                             command[card.id]["x"] = {
                                 $set: x
                             }
@@ -179,23 +184,44 @@ class Board {
 
         this.socket.on('cardUpdate', cardUpdateCallback)
 
-        const initialCardsResponse = await axios.get("/current-user/cards")
-        const initialCards = [...initialCardsResponse.data.cards] as ServerCard[]
-        const cs = initialCards.map(c => {
-            const [x, y] = rotate(0, 0, c.x, c.y, this.angle)
-            c.x = x
-            c.y = y
-            return new Card(c)
+        await this.getInitialCardsFromServer()
+        m.redraw()
+    }
+
+    redrawCards(initialCardsResponse: any = null) {
+        const cardsCopy = { ...this.cards }
+
+        let cards
+        if (initialCardsResponse) {
+            const initialCards = [...initialCardsResponse.data.cards] as ServerCard[]
+            cards = initialCards.map(c => {
+                const card = new Card(c)
+                return card
+            })
+        } else {
+            cards = Object.values(cardsCopy) as Card[]
+        }
+        const { x: camX, y: camY, scale } = this.pz?.getTransform() || { x: 0, y: 0, scale: 1 }
+        const cs = cards.map(card => {
+            const [x, y] = rotate((innerWidth / 2 - camX) / scale, (innerHeight / 2 - camY) / scale, card.realX, card.realY, this.angle)
+            card.x = x
+            card.y = y
+            return card
         })
 
         const cardsById: any = {}
         cs.forEach(c => cardsById[c.id] = c)
 
         this.setCards(cardsById)
-        m.redraw()
     }
 
-    setCards(newCards: any[]) {
+    async getInitialCardsFromServer() {
+        const initialCardsResponse = await axios.get("/current-user/cards")
+
+        this.redrawCards(initialCardsResponse)
+    }
+
+    setCards(newCards: any) {
         this.cards = newCards
 
         this.cs = Object.values(this.cards)
@@ -249,7 +275,11 @@ class Board {
             const card = this.cards[this.draggingCardId]
 
             if (card) {
-                const [x, y] = rotate(0, 0, card.x, card.y, -this.angle)
+                const { x: camX, y: camY, scale } = this.pz?.getTransform() || { x: 0, y: 0, scale: 1 }
+                const [x, y] = rotate((innerWidth / 2 - camX) / scale, (innerHeight / 2 - camY) / scale, card.x, card.y, -this.angle)
+
+                card.realX = x
+                card.realY = y
 
                 await axios.post("/current-user/cards", {
                     cardUpdates: [
@@ -298,7 +328,7 @@ class Board {
                 },
                 y: {
                     $set: y
-                }
+                },
             }
             const movedCards = update(this.cards, command)
 
@@ -350,90 +380,86 @@ class Board {
 
     view() {
         return (
-            <div
-                id="view-pane"
-                className="view"
-                onmousemove={(e: MouseEvent) => this.mouseMove(e)}
-                onmouseup={(e: MouseEvent) => this.mouseUp(e)}
-                ontouchmove={(e: TouchEvent) => {
-                    this.mouseMove({
-                        clientX: e.touches[0]?.clientX || 0,
-                        clientY: e.touches[0]?.clientY || 0,
-                        stopImmediatePropagation: e.stopImmediatePropagation.bind(e),
-                        preventDefault: e.preventDefault.bind(e)
-                    })
-                }}
-                ontouchend={(e: TouchEvent) => this.mouseUp({
-                    clientX: e.touches[0]?.clientX || 0,
-                    clientY: e.touches[0]?.clientY || 0,
-                    stopImmediatePropagation: e.stopImmediatePropagation.bind(e),
-                    preventDefault: e.preventDefault.bind(e)
-                })}
-            >
-                <div id="view-container">
-                    {
-                        (() => {
-                            return this.cs.map((c: any) => {
-                                return (
-                                    <div
-                                        style={{
-                                            transform: `translate(-50%, -50%) rotate(${-this.angle}deg)`,
-                                            top: c.y + "px",
-                                            left: c.x + "px"
-                                        }}
-                                        className={classnames({
-                                            "card": true,
-                                            "card-transition": (
-                                                !(this.panning) &&
-                                                !(this.draggingCardId === c.id)
-                                            )
-                                        })}
-                                        key={c.id}
-                                        onmousedown={(e: MouseEvent) => this.mouseDownFor(c, e)}
-                                        ontouchstart={(e: TouchEvent) => this.mouseDownFor(c, {
-                                            clientX: e.touches[0]?.clientX || 0,
-                                            clientY: e.touches[0]?.clientY || 0,
-                                            stopImmediatePropagation: e.stopImmediatePropagation.bind(e),
-                                            preventDefault: e.preventDefault.bind(e),
-                                            target: e.touches[0]?.target as HTMLElement
-                                        })}
-                                    >
-                                        {c.id}
-                                    </div>
-                                )
-                            })
-                        })()
-                    }
-                </div>
-            </div>
-        )
-    }
-}
-
-class App {
-    shouldPanZoom: boolean
-    fullscreen: boolean
-
-    constructor(vnode: Vnode) {
-        this.shouldPanZoom = false
-        this.fullscreen = false
-    }
-
-    view() {
-        return (
             <div>
                 <div id="view-inner">
-                    <Board shouldPanZoom={this.shouldPanZoom}></Board>
+                    <div
+                        id="view-pane"
+                        class={classnames({ unlocked: this.shouldPanZoom, locked: !this.shouldPanZoom })}
+                        onmousemove={(e: MouseEvent) => this.mouseMove(e)}
+                        onmouseup={(e: MouseEvent) => this.mouseUp(e)}
+                        ontouchmove={(e: TouchEvent) => {
+                            this.mouseMove({
+                                clientX: e.touches[0]?.clientX || 0,
+                                clientY: e.touches[0]?.clientY || 0,
+                                stopImmediatePropagation: e.stopImmediatePropagation.bind(e),
+                                preventDefault: e.preventDefault.bind(e)
+                            })
+                        }}
+                        ontouchend={(e: TouchEvent) => this.mouseUp({
+                            clientX: e.touches[0]?.clientX || 0,
+                            clientY: e.touches[0]?.clientY || 0,
+                            stopImmediatePropagation: e.stopImmediatePropagation.bind(e),
+                            preventDefault: e.preventDefault.bind(e)
+                        })}
+                    >
+                        <div id="view-container" class="view-container">
+                            {
+                                (() => {
+                                    return this.cs.map((c: any) => {
+                                        return (
+                                            <div
+                                                style={{
+                                                    transform: `translate(-50%, -50%) rotate(${-this.angle}deg)`,
+                                                    top: c.y + "px",
+                                                    left: c.x + "px"
+                                                }}
+                                                className={classnames({
+                                                    "card": true,
+                                                    "card-transition": (
+                                                        !(this.panning) &&
+                                                        !(this.draggingCardId === c.id)
+                                                    )
+                                                })}
+                                                key={c.id}
+                                                onmousedown={(e: MouseEvent) => this.mouseDownFor(c, {
+                                                    clientX: e.clientX || 0,
+                                                    clientY: e.clientY || 0,
+                                                    stopImmediatePropagation: e.stopImmediatePropagation.bind(e),
+                                                    preventDefault: e.preventDefault.bind(e),
+                                                    target: e.target as HTMLElement
+                                                })}
+                                                ontouchstart={(e: TouchEvent) => this.mouseDownFor(c, {
+                                                    clientX: e.touches[0]?.clientX || 0,
+                                                    clientY: e.touches[0]?.clientY || 0,
+                                                    stopImmediatePropagation: e.stopImmediatePropagation.bind(e),
+                                                    preventDefault: e.preventDefault.bind(e),
+                                                    target: e.touches[0]?.target as HTMLElement
+                                                })}
+                                            >
+                                                {c.id}
+                                            </div>
+                                        )
+                                    })
+                                })()
+                            }
+                        </div>
+                    </div>
                 </div>
                 <button
                     onclick={(e: MouseEvent) => {
-                        e.stopImmediatePropagation()
                         this.shouldPanZoom = !this.shouldPanZoom
+                        if (this.pz) {
+                            if (this.shouldPanZoom) {
+                                this.pz.resume()
+                            } else {
+                                this.pz.pause()
+                            }
+                        }
                     }}
                 >
-                    Pan/Zoom
+                    {this.shouldPanZoom ? "Move pieces" : "Pan/Zoom"}
                 </button>
-                <button style={{ bottom: "0px" }} onclick={() => {
+                <button style={{ bottom: "0px", display: this.shouldPanZoom ? "initial" : "none" }} onclick={() => {
                     if (this.fullscreen) {
                         document.exitFullscreen()
                         this.fullscreen = false
@@ -442,8 +468,21 @@ class App {
                         this.fullscreen = true
                     }
                 }}>Fullscreen</button>
+                <button style={{ left: "50%", transform: "translate(-50%, 0%)", display: this.shouldPanZoom ? "initial" : "none" }} onclick={async () => {
+                    if (this.pz) {
+                        this.panning = true
+                        this.angle += 45
+                        const transform = this.pz.getTransform()
+                        window.location.hash = this.stringifyTransform(transform, this.angle)
+                        this.redrawCards()
+                    }
+                }}>Rotate</button>
             </div>
         )
+    }
+
+    onupdate() {
+        this.panning = false
     }
 }
 
@@ -479,7 +518,7 @@ const initApp = async () => {
 
     m.mount(
         document.getElementById('view') as HTMLElement,
-        App
+        Board
     );
 }
 

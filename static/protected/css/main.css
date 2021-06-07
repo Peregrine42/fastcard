@@ -38,10 +38,18 @@ body {
 
 #view-pane {
     position: absolute;
-    width: 100%;
-    height: 100%;
+    width: calc(100% - 10px);
+    height: calc(100% - 10px);
 }
 
 button {
     position: fixed;
+}
+
+.locked {
+    border: 5px solid white
+}
+
+.unlocked {
+    border: 5px solid transparent
 }
