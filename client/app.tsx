@@ -64,6 +64,7 @@ class Board {
     panning: boolean
     angle: number
     fullscreen: boolean
+    isInErrorState: boolean
 
     constructor(_vnode: Vnode) {
         this.cards = {}
@@ -75,11 +76,12 @@ class Board {
         this.panning = false
         this.angle = 0
         this.fullscreen = false
+        this.isInErrorState = false
     }
 
-    stringifyTransform(transform: any, angle: number) {
+    stringifyTransform(transform: any, angle: number, shouldPanZoom: boolean) {
         if (transform) {
-            return `${transform.x},${transform.y},${transform.scale},${angle % 360}`
+            return `${transform.x},${transform.y},${transform.scale},${angle % 360},${shouldPanZoom ? "pan" : "move"}`
         } else {
             return `${angle}`
         }
@@ -88,9 +90,23 @@ class Board {
     parseTransform(string?: string) {
         if (string) {
             const parts = string.split(",")
-            if (parts.length === 4) {
-                const [x, y, scale, angle] = string.split(",").map(part => parseFloat(part))
-                return { x, y, scale, angle }
+            if (parts.length === 5) {
+                const [x, y, scale, angle, panOrMove] = string.split(",")
+                this.shouldPanZoom = panOrMove === "pan"
+                if (this.pz) {
+                    if (this.shouldPanZoom) {
+                        this.pz.resume()
+                    } else {
+                        this.pz.pause()
+                    }
+                    m.redraw()
+                }
+                return {
+                    x: parseFloat(x),
+                    y: parseFloat(y),
+                    scale: parseFloat(scale),
+                    angle: parseFloat(angle),
+                }
             }
         }
         return { x: 0, y: 0, scale: 1, angle: 0 }
@@ -118,7 +134,7 @@ class Board {
         }
 
         this.pz.on("transform", throttle(() => {
-            window.location.hash = this.stringifyTransform(this.pz?.getTransform(), this.angle)
+            window.location.hash = this.stringifyTransform(this.pz?.getTransform(), this.angle, this.shouldPanZoom)
         }, 300))
 
         const cardUpdateCallback = ({ fromUserId, cardUpdates: newStates }: { fromUserId: number, cardUpdates: any }) => {
@@ -180,6 +196,11 @@ class Board {
 
         this.socket.on("connect", () => {
             console.log("Connected!")
+        })
+
+        this.socket.on("disconnect", () => {
+            this.isInErrorState = true
+            m.redraw()
         })
 
 
@@ -282,19 +303,24 @@ class Board {
                 card.realX = x
                 card.realY = y
 
-                await axios.post("/current-user/cards", {
-                    cardUpdates: [
-                        {
-                            id: this.draggingCardId,
-                            x: x,
-                            y: y
+                try {
+                    await axios.post("/current-user/cards", {
+                        cardUpdates: [
+                            {
+                                id: this.draggingCardId,
+                                x: x,
+                                y: y
+                            }
+                        ]
+                    }, {
+                        headers: {
+                            'X-CSRF-TOKEN': this.csrf
                         }
-                    ]
-                }, {
-                    headers: {
-                        'X-CSRF-TOKEN': this.csrf
-                    }
-                })
+                    })
+                } catch (e) {
+                    console.error(e)
+                    this.isInErrorState = true
+                }
             }
             this.draggingCardId = null
         }
@@ -380,6 +406,15 @@ class Board {
     }
 
     view() {
+        if (this.isInErrorState) {
+            return (
+                <div>Something went wrong. Please <button onclick={async () => {
+                    await axios.get("/")
+                    location.reload()
+                }}>reload the page</button> to continue where you left off.</div>
+            )
+        }
+
         return (
             <div>
                 <div id="view-inner">
@@ -447,6 +482,7 @@ class Board {
                     </div>
                 </div>
                 <button
+                    class="button"
                     onclick={(e: MouseEvent) => {
                         this.shouldPanZoom = !this.shouldPanZoom
                         if (this.pz) {
@@ -455,29 +491,42 @@ class Board {
                             } else {
                                 this.pz.pause()
                             }
+                            window.location.hash = this.stringifyTransform(this.pz?.getTransform(), this.angle, this.shouldPanZoom)
                         }
                     }}
                 >
                     {this.shouldPanZoom ? "Move pieces" : "Pan/Zoom"}
                 </button>
-                <button style={{ bottom: "0px", display: this.shouldPanZoom ? "initial" : "none" }} onclick={() => {
-                    if (this.fullscreen) {
-                        document.exitFullscreen()
-                        this.fullscreen = false
-                    } else {
-                        document.body.requestFullscreen()
-                        this.fullscreen = true
-                    }
-                }}>Fullscreen</button>
-                <button style={{ left: "50%", transform: "translate(-50%, 0%)", display: this.shouldPanZoom ? "initial" : "none" }} onclick={async () => {
-                    if (this.pz) {
-                        this.panning = true
-                        this.angle += 45
-                        const transform = this.pz.getTransform()
-                        window.location.hash = this.stringifyTransform(transform, this.angle)
-                        this.redrawCards()
-                    }
-                }}>Rotate</button>
+                <button
+                    class="button"
+                    style={{ bottom: "0px", display: this.shouldPanZoom ? "initial" : "none" }}
+                    onclick={() => {
+                        if (this.fullscreen) {
+                            document.exitFullscreen()
+                            this.fullscreen = false
+                        } else {
+                            document.body.requestFullscreen()
+                            this.fullscreen = true
+                        }
+                    }}
+                >
+                    Fullscreen
+                </button>
+                <button
+                    style={{ left: "50%", transform: "translate(-50%, 0%)", display: this.shouldPanZoom ? "initial" : "none" }}
+                    onclick={async () => {
+                        if (this.pz) {
+                            this.panning = true
+                            this.angle += 45
+                            const transform = this.pz.getTransform()
+                            window.location.hash = this.stringifyTransform(transform, this.angle, this.shouldPanZoom)
+                            this.redrawCards()
+                        }
+                    }}
+                    class="button"
+                >
+                    Rotate
+                </button>
             </div>
         )
     }

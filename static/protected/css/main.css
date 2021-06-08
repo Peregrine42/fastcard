@@ -42,7 +42,7 @@ body {
     height: calc(100% - 10px);
 }
 
-button {
+.button {
     position: fixed;
 }
 
