@@ -19,7 +19,7 @@ body {
 }
 
 .card-transition {
-    transition: left 0.3s, top 0.3s;
+    transition: left 0.3s, top 0.3s, transform 0.3s;
 }
 
 #view {

@@ -211,8 +211,6 @@ class Board {
     }
 
     redrawCards(initialCardsResponse: any = null) {
-        const cardsCopy = { ...this.cards }
-
         let cards
         if (initialCardsResponse) {
             const initialCards = [...initialCardsResponse.data.cards] as ServerCard[]
@@ -221,11 +219,14 @@ class Board {
                 return card
             })
         } else {
-            cards = Object.values(cardsCopy) as Card[]
+            cards = Object.values(this.cards) as Card[]
         }
+
         const { x: camX, y: camY, scale } = this.pz?.getTransform() || { x: 0, y: 0, scale: 1 }
+        const [newX, newY] = rotate(0, 0, camX, camY, this.angle)
         const cs = cards.map(card => {
-            const [x, y] = rotate((innerWidth / 2 - camX) / scale, (innerHeight / 2 - camY) / scale, card.realX, card.realY, this.angle)
+            const [x, y] = rotate(((innerWidth / 2)) / scale - camX, ((innerHeight / 2)) / scale - camY, card.realX, card.realY, this.angle)
+
             card.x = x
             card.y = y
             return card
@@ -239,7 +240,6 @@ class Board {
 
     async getInitialCardsFromServer() {
         const initialCardsResponse = await axios.get("/current-user/cards")
-
         this.redrawCards(initialCardsResponse)
     }
 
@@ -516,11 +516,16 @@ class Board {
                     style={{ left: "50%", transform: "translate(-50%, 0%)", display: this.shouldPanZoom ? "initial" : "none" }}
                     onclick={async () => {
                         if (this.pz) {
+                            const angleStride = 45
+
                             this.panning = true
-                            this.angle += 45
+                            this.angle += angleStride
+                            this.redrawCards()
+                            // const { x, y, scale } = this.pz.getTransform()
+                            // const [newX, newY] = rotate(0, 0, x, y, angleStride)
+                            // this.pz.moveTo(newX, newY)
                             const transform = this.pz.getTransform()
                             window.location.hash = this.stringifyTransform(transform, this.angle, this.shouldPanZoom)
-                            this.redrawCards()
                         }
                     }}
                     class="button"
