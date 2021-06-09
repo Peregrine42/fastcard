@@ -1,25 +1,24 @@
 import axios from "axios"
-import { serializeError } from "serialize-error"
 import update from 'immutability-helper'
 import { io, Socket } from 'socket.io-client'
 import m, { Vnode, VnodeDOM } from "mithril"
-import panzoom, { PanZoom } from "panzoom"
 import classnames from "classnames"
 
 // @ts-ignore
 import nudged from "nudged"
+import { serializeError } from "serialize-error"
 
 const log = async (...args: any[]) => {
     console.log(...args)
-    await axios.post("/log", {
-        message: args.map(a => serializeError(a, { maxDepth: 50 }))
-    })
-}
+    const csrfEl = document.getElementById("csrf_token") as HTMLElement
+    const csrf = csrfEl.getAttribute("value") || ""
 
-const error = async (...args: any[]) => {
-    console.error(...args)
     await axios.post("/log", {
         message: args.map(a => serializeError(a, { maxDepth: 50 }))
+    }, {
+        headers: {
+            'X-CSRF-TOKEN': csrf
+        }
     })
 }
 
@@ -39,21 +38,38 @@ class NudgedPanZoomRotate {
     dom: any
     startPanX: number = 0
     startPanY: number = 0
+    startTouches: any[] = []
     panning: boolean = false
+    onTransform: any
+    pointers: any = {}
+    committedTransform: any
+    // totalTransform: any
 
-    constructor(dom: any) {
+    constructor(dom: any, onTransform: any) {
         this.dom = dom
+        this.onTransform = onTransform
     }
 
     init() {
         this.currentTransform = nudged.Transform.IDENTITY
         this.beforeDragTransform = nudged.Transform.IDENTITY
-        this.sync()
+        this.sync(true)
     }
 
-    sync() {
+    setTransform(transformArray: number[] | null) {
+        if (!transformArray) this.currentTransform = nudged.Transform.IDENTITY
+        else {
+            this.currentTransform = nudged.createFromArray(transformArray)
+        }
+        this.sync(true)
+    }
+
+    sync(isDone = false) {
         const { a, b, c, d, e, f } = this.currentTransform.getMatrix()
         this.dom.style.transform = `matrix(${a}, ${b}, ${c}, ${d}, ${e}, ${f})`
+        if (this.onTransform) this.onTransform()
+        if (isDone) this.committedTransform = nudged.createFromArray(this.currentTransform.toArray())
+
     }
 
     startPan(e: any) {
@@ -68,11 +84,12 @@ class NudgedPanZoomRotate {
             e.clientX - this.startPanX,
             e.clientY - this.startPanY
         )
-        this.sync()
+        this.sync(true)
     }
 
     endPan() {
         this.panning = false
+        this.sync(true)
     }
 
     onWheel(e: any) {
@@ -81,11 +98,112 @@ class NudgedPanZoomRotate {
 
         const newTransform = nudged.Transform.IDENTITY.scaleBy(direction, [x, y])
         this.currentTransform = this.currentTransform.multiplyBy(newTransform)
-        this.sync()
+        this.sync(true)
     }
 
     rotate() {
         this.currentTransform = this.currentTransform.rotateBy(45 / 180 * Math.PI, [0, 0])
+        this.sync(true)
+    }
+
+    touchDragStart(touches: any[]) {
+        this.startTouches = touches.map(t => { return { ...t } }).sort((a, b) => {
+            if (a.identifier < b.identifier) {
+                return -1
+            } else {
+                return 1
+            }
+        })
+        this.beforeDragTransform = nudged.createFromArray(this.currentTransform.toArray())
+        this.panning = true
+    }
+
+    touchDrag(touches: any[]) {
+        const domain = this.startTouches.map(t => [t.clientX, t.clientY])
+        touches.sort((a, b) => {
+            if (a.identifier < b.identifier) {
+                return -1
+            } else {
+                return 1
+            }
+        })
+        const range = touches.map(t => [t.clientX, t.clientY])
+        this.currentTransform = this.currentTransform.multiplyBy(nudged.estimate("TS", domain, range))
+        this.startTouches = touches.map(t => { return { ...t } }).sort((a, b) => {
+            if (a.identifier < b.identifier) {
+                return -1
+            } else {
+                return 1
+            }
+        })
+        this.sync(true)
+    }
+
+    startTouch(id: any, x: any, y: any) {
+        this.commit()
+        this.pointers[id] = { dx: x, dy: y, rx: x, ry: y }
+        this.updateTransform()
+    }
+
+    continueTouch(id: any, x: any, y: any) {
+        if (this.pointers.hasOwnProperty(id)) {
+            this.pointers[id].rx = x
+            this.pointers[id].ry = y
+            this.updateTransform()
+        }
+    }
+
+    endTouch(id: any, x: any, y: any) {
+        this.commit()
+        delete this.pointers[id]
+    }
+
+    commit() {
+        // Move ongoing transformation to the committed transformation so that
+        // the total transformation stays the same.
+
+        // Commit ongoingTransformation. As a result
+        // the domain and range of all pointers become equal.
+        let id: any, p: any, domain: any, range: any, t: any
+        domain = []
+        range = []
+        for (id in this.pointers) {
+            if (this.pointers.hasOwnProperty(id)) {
+                p = this.pointers[id]
+                domain.push([p.dx, p.dy])
+                range.push([p.rx, p.ry]) // copies
+                // Move transformation from current pointers;
+                // Turn ongoingTransformation to identity.
+                p.dx = p.rx
+                p.dy = p.ry
+            }
+        }
+        // Calculate the transformation to commit and commit it by
+        // combining it with the previous transformations. Total transform
+        // then becomes identical with the commited ones.
+        t = nudged.estimateTS(domain, range)
+        this.committedTransform = t.multiplyBy(this.committedTransform)
+        this.currentTransform = this.committedTransform
+        this.sync(true)
+    }
+
+    updateTransform() {
+        // Calculate the total transformation from the committed transformation
+        // and the points of the ongoing transformation.
+
+        let id: any, p, domain: any, range: any, t
+        domain = []
+        range = []
+        for (id in this.pointers) {
+            if (this.pointers.hasOwnProperty(id)) {
+                p = this.pointers[id]
+                domain.push([p.dx, p.dy])
+                range.push([p.rx, p.ry])
+            }
+        }
+        // Calculate ongoing transform and combine it with the committed.
+        t = nudged.estimateTS(domain, range)
+        this.currentTransform = t.multiplyBy(this.committedTransform)
         this.sync()
     }
 }
@@ -119,13 +237,13 @@ class Board {
     offset: [number, number]
     isDown: boolean
     cs: any[]
-    pz?: PanZoom
     shouldPanZoom: boolean
     panning: boolean
     angle: number
     fullscreen: boolean
     isInErrorState: boolean
     nudgedPanZoomRotate: null | NudgedPanZoomRotate
+    touches: any[] = []
 
     constructor(_vnode: Vnode) {
         this.cards = {}
@@ -141,11 +259,12 @@ class Board {
         this.nudgedPanZoomRotate = null
     }
 
-    stringifyTransform(transform: any, angle: number, shouldPanZoom: boolean) {
+    stringifyTransform(transform: any, shouldPanZoom: boolean) {
         if (transform) {
-            return `${transform.x},${transform.y},${transform.scale},${angle % 360},${shouldPanZoom ? "pan" : "move"}`
+            const [s, r, tx, ty] = transform
+            return `${s},${r},${tx},${ty},${shouldPanZoom ? "pan" : "move"}`
         } else {
-            return `${angle}`
+            return `${shouldPanZoom ? "pan" : "move"}`
         }
     }
 
@@ -153,54 +272,38 @@ class Board {
         if (string) {
             const parts = string.split(",")
             if (parts.length === 5) {
-                const [x, y, scale, angle, panOrMove] = string.split(",")
+                const [s, r, tx, ty, panOrMove] = string.split(",")
                 this.shouldPanZoom = panOrMove === "pan"
-                if (this.pz) {
-                    if (this.shouldPanZoom) {
-                        this.pz.resume()
-                    } else {
-                        this.pz.pause()
-                    }
-                    m.redraw()
-                }
-                return {
-                    x: parseFloat(x),
-                    y: parseFloat(y),
-                    scale: parseFloat(scale),
-                    angle: parseFloat(angle),
-                }
+                return [
+                    parseFloat(s),
+                    parseFloat(r),
+                    parseFloat(tx),
+                    parseFloat(ty),
+                ]
             }
         }
-        return { x: 0, y: 0, scale: 1, angle: 0 }
+        return null
     }
 
-    async oncreate(vnode: VnodeDOM<{ shouldPanZoom: boolean }>) {
+    async oncreate(vnode: VnodeDOM<{}>) {
+        window.addEventListener("resize", throttle(async () => {
+            await this.reload(vnode)
+        }, 1000))
+
+        await this.reload(vnode)
+    }
+
+    async reload(vnode: VnodeDOM<{}>) {
         const dom = vnode.dom as HTMLElement
         const child = dom.getElementsByClassName("view-container")[0] as HTMLElement
-        const { x, y, scale, angle } = this.parseTransform(window.location.hash.slice(1))
+        const transformArray = this.parseTransform(window.location.hash.slice(1))
 
-        this.angle = angle
-
-        this.nudgedPanZoomRotate = new NudgedPanZoomRotate(child)
+        this.nudgedPanZoomRotate = new NudgedPanZoomRotate(child, throttle(() => {
+            location.hash = this.stringifyTransform(this.nudgedPanZoomRotate?.currentTransform.toArray(), this.shouldPanZoom)
+        }, 300))
         this.nudgedPanZoomRotate.init()
 
-        // this.pz = panzoom(child as HTMLElement, {
-        //     smoothScroll: false,
-        //     zoomDoubleClickSpeed: 1,
-        //     initialX: x,
-        //     initialY: y,
-        //     initialZoom: scale
-        // })
-
-        // this.pz.moveTo(x, y)
-
-        // if (!this.shouldPanZoom) {
-        //     // this.pz.pause()
-        // }
-
-        // this.pz.on("transform", throttle(() => {
-        //     window.location.hash = this.stringifyTransform(this.pz?.getTransform(), this.angle, this.shouldPanZoom)
-        // }, 300))
+        this.nudgedPanZoomRotate.setTransform(transformArray)
 
         const cardUpdateCallback = ({ fromUserId, cardUpdates: newStates }: { fromUserId: number, cardUpdates: any }) => {
             const command: any = {}
@@ -259,7 +362,6 @@ class Board {
             this.isInErrorState = true
             m.redraw()
         })
-
 
         this.socket.on('cardUpdate', cardUpdateCallback)
 
@@ -391,11 +493,12 @@ class Board {
             preventDefault: () => void,
             clientX: number,
             clientY: number
-        }
+        },
+        pan = true
     ) {
         if (this.shouldPanZoom) {
-            if (this.nudgedPanZoomRotate?.panning) {
-                this.nudgedPanZoomRotate?.continuePan(e)
+            if (this.nudgedPanZoomRotate?.panning && pan) {
+                return this.nudgedPanZoomRotate?.continuePan(e)
             }
         }
         e.stopImmediatePropagation()
@@ -403,13 +506,8 @@ class Board {
         if (this.isDown && this.draggingCardId) {
             const card = this.cards[this.draggingCardId]
             const command: any = {}
-            let transform = { scale: 1, x: 0, y: 0 }
-            if (this.pz) {
-                transform = this.pz.getTransform()
-            }
             const newX = e.clientX + this.offset[0]
             const newY = e.clientY + this.offset[1]
-
 
             if (this.nudgedPanZoomRotate) {
                 const [x, y] = this.nudgedPanZoomRotate.currentTransform.inverse().transform([newX, newY])
@@ -493,31 +591,89 @@ class Board {
                 <div id="view-inner">
                     <div
                         id="view-pane"
-                        class={classnames({ unlocked: this.shouldPanZoom, locked: !this.shouldPanZoom })}
                         onwheel={(e: any) => this.onWheel(e)}
                         onmousemove={(e: MouseEvent) => this.mouseMove(e)}
                         onmouseup={(e: MouseEvent) => this.mouseUp(e)}
-                        onmousedown={(e: MouseEvent) => this.mouseDown({
-                            clientX: e.clientX || 0,
-                            clientY: e.clientY || 0,
-                            stopImmediatePropagation: e.stopImmediatePropagation.bind(e),
-                            preventDefault: e.preventDefault.bind(e),
-                            target: e.target as HTMLElement
-                        })}
-                        ontouchmove={(e: TouchEvent) => {
-                            this.mouseMove({
-                                clientX: e.touches[0]?.clientX || 0,
-                                clientY: e.touches[0]?.clientY || 0,
+                        onmousedown={(e: MouseEvent) => {
+                            this.mouseDown({
+                                clientX: e.clientX || 0,
+                                clientY: e.clientY || 0,
                                 stopImmediatePropagation: e.stopImmediatePropagation.bind(e),
-                                preventDefault: e.preventDefault.bind(e)
+                                preventDefault: e.preventDefault.bind(e),
+                                target: e.target as HTMLElement
                             })
                         }}
-                        ontouchend={(e: TouchEvent) => this.mouseUp({
-                            clientX: e.touches[0]?.clientX || 0,
-                            clientY: e.touches[0]?.clientY || 0,
-                            stopImmediatePropagation: e.stopImmediatePropagation.bind(e),
-                            preventDefault: e.preventDefault.bind(e)
-                        })}
+                        ontouchstart={(e: TouchEvent) => {
+                            if (this.shouldPanZoom) {
+                                Array.from(e.changedTouches).forEach(t => {
+                                    if (!this.touches.map(to => to.identifier).includes(t.identifier)) {
+                                        this.nudgedPanZoomRotate?.startTouch(
+                                            t.identifier,
+                                            t.clientX - (innerWidth / 2),
+                                            t.clientY - (innerHeight / 2),
+                                        )
+                                        this.touches.push({ identifier: t.identifier })
+                                    }
+                                })
+                            } else {
+                                this.mouseDown({
+                                    clientX: e.touches[0]?.clientX || 0,
+                                    clientY: e.touches[0]?.clientY || 0,
+                                    stopImmediatePropagation: e.stopImmediatePropagation.bind(e),
+                                    preventDefault: e.preventDefault.bind(e),
+                                    target: e.target as HTMLElement
+                                })
+                            }
+                        }}
+                        ontouchmove={(e: TouchEvent) => {
+                            if (this.shouldPanZoom) {
+                                Array.from(e.changedTouches).forEach(t => {
+                                    if (!this.touches.map(to => to.identifier).includes(t.identifier)) {
+                                        this.nudgedPanZoomRotate?.startTouch(
+                                            t.identifier,
+                                            t.clientX - (innerWidth / 2),
+                                            t.clientY - (innerHeight / 2),
+                                        )
+                                        this.touches.push({ identifier: t.identifier })
+                                    } else {
+                                        this.nudgedPanZoomRotate?.continueTouch(
+                                            t.identifier,
+                                            t.clientX - (innerWidth / 2),
+                                            t.clientY - (innerHeight / 2),
+                                        )
+                                    }
+                                })
+                            } else {
+                                this.mouseMove({
+                                    clientX: e.touches[0]?.clientX || 0,
+                                    clientY: e.touches[0]?.clientY || 0,
+                                    stopImmediatePropagation: e.stopImmediatePropagation.bind(e),
+                                    preventDefault: e.preventDefault.bind(e)
+                                }, false)
+                            }
+                        }}
+                        ontouchend={(e: TouchEvent) => {
+                            if (this.shouldPanZoom) {
+                                Array.from(e.changedTouches).forEach(t => {
+                                    const index = this.touches.findIndex(to => to.identifier === t.identifier)
+                                    if (index > -1) {
+                                        this.nudgedPanZoomRotate?.endTouch(
+                                            t.identifier,
+                                            t.clientX - (innerWidth / 2),
+                                            t.clientY - (innerHeight / 2),
+                                        )
+                                        this.touches.splice(index, 1)
+                                    }
+                                })
+                            } else {
+                                this.mouseUp({
+                                    clientX: e.touches[0]?.clientX || 0,
+                                    clientY: e.touches[0]?.clientY || 0,
+                                    stopImmediatePropagation: e.stopImmediatePropagation.bind(e),
+                                    preventDefault: e.preventDefault.bind(e)
+                                })
+                            }
+                        }}
                     >
                         <div id="view-container" class="view-container">
                             {
@@ -566,14 +722,7 @@ class Board {
                     class="button"
                     onclick={(e: MouseEvent) => {
                         this.shouldPanZoom = !this.shouldPanZoom
-                        if (this.pz) {
-                            if (this.shouldPanZoom) {
-                                this.pz.resume()
-                            } else {
-                                this.pz.pause()
-                            }
-                            window.location.hash = this.stringifyTransform(this.pz?.getTransform(), this.angle, this.shouldPanZoom)
-                        }
+                        window.location.hash = this.stringifyTransform(this.nudgedPanZoomRotate?.currentTransform.toArray(), this.shouldPanZoom)
                     }}
                 >
                     {this.shouldPanZoom ? "Move pieces" : "Pan/Zoom"}
@@ -596,25 +745,13 @@ class Board {
                 <button
                     style={{ left: "50%", transform: "translate(-50%, 0%)", display: this.shouldPanZoom ? "initial" : "none" }}
                     onclick={async () => {
-                        // if (this.pz) {
-                        //     const angleStride = 45
-
-                        //     this.panning = true
-                        //     this.angle += angleStride
-                        //     this.redrawCards()
-                        //     // const { x, y, scale } = this.pz.getTransform()
-                        //     // const [newX, newY] = rotate(0, 0, x, y, angleStride)
-                        //     // this.pz.moveTo(newX, newY)
-                        //     const transform = this.pz.getTransform()
-                        //     window.location.hash = this.stringifyTransform(transform, this.angle, this.shouldPanZoom)
-                        // }
                         this.nudgedPanZoomRotate?.rotate()
                     }}
                     class="button"
                 >
                     Rotate
                 </button>
-            </div>
+            </div >
         )
     }
 
@@ -640,16 +777,6 @@ function throttle(func: any, timeFrame: number) {
     };
 }
 
-function rotate(cx: number, cy: number, x: number, y: number, angle: number) {
-    const radians = (Math.PI / 180) * angle,
-        cos = Math.cos(radians),
-        sin = Math.sin(radians),
-        nx = (cos * (x - cx)) + (sin * (y - cy)) + cx,
-        ny = (cos * (y - cy)) - (sin * (x - cx)) + cy;
-    return [nx, ny];
-}
-
-
 const initApp = async () => {
     await new Promise(res => window.addEventListener("load", res))
 
@@ -659,4 +786,4 @@ const initApp = async () => {
     );
 }
 
-initApp().catch(e => error(e))
+initApp()
