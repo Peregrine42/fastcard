@@ -77,29 +77,15 @@ class NudgedPanZoomRotate {
 
     onWheel(e: any) {
         const direction = e.deltaY > 0 ? 1.1 : 0.9
-
-        // const x = e.clientX * 1.2 - (innerWidth / 2)
-        // const y = e.clientY * 1.1 - (innerHeight / 2)
-        // const x2 = e.clientX * 1.1 - (innerWidth / 2)
-        // const y2 = e.clientY * 1.2 - (innerHeight / 2)
-        // const p1x = e.clientX * direction - (innerWidth / 2)
-        // const p1y = e.clientY * 1.1 - (innerHeight / 2)
-        // const p2x = e.clientX * 1.1 - (innerWidth / 2)
-        // const p2y = e.clientY * direction - (innerHeight / 2)
-
-        // const [center1X, center1Y] = this.currentTransform.inverse().transform([x, y])
-        // const [center2X, center2Y] = this.currentTransform.inverse().transform([x2, y2])
-        // const [point1X, point1Y] = this.currentTransform.inverse().transform([p1x, p1y])
-        // const [point2X, point2Y] = this.currentTransform.inverse().transform([p2x, p2y])
-
-        // const domain = [[center1X, center1Y], [center2X, center2Y]]
-        // const range = [[point1X, point1Y], [point2X, point2Y]]
-
-        // const newTransform = nudged.estimate("TS", domain, range)
         const [x, y] = this.currentTransform.inverse().transform([e.clientX - (innerWidth / 2), e.clientY - (innerHeight / 2)])
 
         const newTransform = nudged.Transform.IDENTITY.scaleBy(direction, [x, y])
         this.currentTransform = this.currentTransform.multiplyBy(newTransform)
+        this.sync()
+    }
+
+    rotate() {
+        this.currentTransform = this.currentTransform.rotateBy(45 / 180 * Math.PI, [0, 0])
         this.sync()
     }
 }
@@ -229,19 +215,11 @@ class Board {
                             typeof (s.x) !== "undefined" &&
                             typeof (s.y) !== "undefined"
                         ) {
-                            const { x: camX, y: camY, scale } = this.pz?.getTransform() || { x: 0, y: 0, scale: 1 }
-                            // const [x, y] = rotate((innerWidth / 2 - camX) / scale, (innerHeight / 2 - camY) / scale, s.x, s.y, this.angle)
-                            // command[card.id]["realX"] = {
-                            //     $set: s.x
-                            // }
-                            // command[card.id]["realY"] = {
-                            //     $set: s.y
-                            // }
                             command[card.id]["x"] = {
-                                $set: s.x
+                                $set: s.x + (innerWidth / 2)
                             }
                             command[card.id]["y"] = {
-                                $set: s.y
+                                $set: s.y + (innerHeight / 2)
                             }
                         }
                         if (typeof (s.z) !== "undefined") {
@@ -301,18 +279,18 @@ class Board {
             cards = Object.values(this.cards) as Card[]
         }
 
-        // const { x: camX, y: camY, scale } = this.pz?.getTransform() || { x: 0, y: 0, scale: 1 }
-        // const [newX, newY] = rotate(0, 0, camX, camY, this.angle)
-        // const cs = cards.map(card => {
-        //     const [x, y] = rotate(((innerWidth / 2)) / scale - camX, ((innerHeight / 2)) / scale - camY, card.realX, card.realY, this.angle)
 
-        //     card.x = x
-        //     card.y = y
-        //     return card
-        // })
+        const cs = cards.map(card => {
+            if (this.nudgedPanZoomRotate) {
+                card.x = card.x + (innerWidth / 2)
+                card.y = card.y + (innerHeight / 2)
+
+                return card
+            }
+        })
 
         const cardsById: any = {}
-        cards.forEach(c => cardsById[c.id] = c)
+        cs.forEach(c => { if (c) { cardsById[c.id] = c } })
 
         this.setCards(cardsById)
     }
@@ -353,13 +331,12 @@ class Board {
         if (this.shouldPanZoom) return
         e.stopImmediatePropagation()
         this.isDown = true
-        let transform = { scale: 1, x: 0, y: 0 }
-        if (this.pz) {
-            transform = this.pz.getTransform()
-        }
+
+        const [x, y] = this.nudgedPanZoomRotate?.currentTransform.transform([(e.target).offsetLeft, (e.target).offsetTop])
+
         this.offset = [
-            (e.target).offsetLeft - (e.clientX / transform.scale),
-            (e.target).offsetTop - (e.clientY / transform.scale)
+            x - (e.clientX),
+            y - (e.clientY)
         ]
         this.draggingCardId = c.id
     }
@@ -384,20 +361,14 @@ class Board {
         if (this.draggingCardId) {
             const card = this.cards[this.draggingCardId]
 
-            if (card) {
-                const { x: camX, y: camY, scale } = this.pz?.getTransform() || { x: 0, y: 0, scale: 1 }
-                // const [x, y] = rotate((innerWidth / 2 - camX) / scale, (innerHeight / 2 - camY) / scale, card.x, card.y, -this.angle)
-
-                // card.realX = x
-                // card.realY = y
-
+            if (card && this.nudgedPanZoomRotate) {
                 try {
                     await axios.post("/current-user/cards", {
                         cardUpdates: [
                             {
                                 id: this.draggingCardId,
-                                x: card.x,
-                                y: card.y
+                                x: card.x - (innerWidth / 2),
+                                y: card.y - (innerHeight / 2)
                             }
                         ]
                     }, {
@@ -436,18 +407,22 @@ class Board {
             if (this.pz) {
                 transform = this.pz.getTransform()
             }
-            const newX = ((e.clientX) / transform.scale) + this.offset[0]
-            const newY = ((e.clientY) / transform.scale) + this.offset[1]
+            const newX = e.clientX + this.offset[0]
+            const newY = e.clientY + this.offset[1]
 
-            const [x, y] = [newX, newY]
 
-            command[card.id] = {
-                x: {
-                    $set: x
-                },
-                y: {
-                    $set: y
-                },
+            if (this.nudgedPanZoomRotate) {
+                const [x, y] = this.nudgedPanZoomRotate.currentTransform.inverse().transform([newX, newY])
+
+                command[card.id] = {
+                    x: {
+                        $set: x
+                    },
+                    y: {
+                        $set: y
+                    },
+                }
+
             }
             const movedCards = update(this.cards, command)
 
@@ -621,18 +596,19 @@ class Board {
                 <button
                     style={{ left: "50%", transform: "translate(-50%, 0%)", display: this.shouldPanZoom ? "initial" : "none" }}
                     onclick={async () => {
-                        if (this.pz) {
-                            const angleStride = 45
+                        // if (this.pz) {
+                        //     const angleStride = 45
 
-                            this.panning = true
-                            this.angle += angleStride
-                            this.redrawCards()
-                            // const { x, y, scale } = this.pz.getTransform()
-                            // const [newX, newY] = rotate(0, 0, x, y, angleStride)
-                            // this.pz.moveTo(newX, newY)
-                            const transform = this.pz.getTransform()
-                            window.location.hash = this.stringifyTransform(transform, this.angle, this.shouldPanZoom)
-                        }
+                        //     this.panning = true
+                        //     this.angle += angleStride
+                        //     this.redrawCards()
+                        //     // const { x, y, scale } = this.pz.getTransform()
+                        //     // const [newX, newY] = rotate(0, 0, x, y, angleStride)
+                        //     // this.pz.moveTo(newX, newY)
+                        //     const transform = this.pz.getTransform()
+                        //     window.location.hash = this.stringifyTransform(transform, this.angle, this.shouldPanZoom)
+                        // }
+                        this.nudgedPanZoomRotate?.rotate()
                     }}
                     class="button"
                 >
