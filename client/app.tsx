@@ -74,6 +74,34 @@ class NudgedPanZoomRotate {
     endPan() {
         this.panning = false
     }
+
+    onWheel(e: any) {
+        const direction = e.deltaY > 0 ? 1.1 : 0.9
+
+        // const x = e.clientX * 1.2 - (innerWidth / 2)
+        // const y = e.clientY * 1.1 - (innerHeight / 2)
+        // const x2 = e.clientX * 1.1 - (innerWidth / 2)
+        // const y2 = e.clientY * 1.2 - (innerHeight / 2)
+        // const p1x = e.clientX * direction - (innerWidth / 2)
+        // const p1y = e.clientY * 1.1 - (innerHeight / 2)
+        // const p2x = e.clientX * 1.1 - (innerWidth / 2)
+        // const p2y = e.clientY * direction - (innerHeight / 2)
+
+        // const [center1X, center1Y] = this.currentTransform.inverse().transform([x, y])
+        // const [center2X, center2Y] = this.currentTransform.inverse().transform([x2, y2])
+        // const [point1X, point1Y] = this.currentTransform.inverse().transform([p1x, p1y])
+        // const [point2X, point2Y] = this.currentTransform.inverse().transform([p2x, p2y])
+
+        // const domain = [[center1X, center1Y], [center2X, center2Y]]
+        // const range = [[point1X, point1Y], [point2X, point2Y]]
+
+        // const newTransform = nudged.estimate("TS", domain, range)
+        const [x, y] = this.currentTransform.inverse().transform([e.clientX - (innerWidth / 2), e.clientY - (innerHeight / 2)])
+
+        const newTransform = nudged.Transform.IDENTITY.scaleBy(direction, [x, y])
+        this.currentTransform = this.currentTransform.multiplyBy(newTransform)
+        this.sync()
+    }
 }
 
 class Card {
@@ -469,6 +497,12 @@ class Board {
         }
     }
 
+    onWheel(e: any) {
+        if (this.shouldPanZoom) {
+            this.nudgedPanZoomRotate?.onWheel(e)
+        }
+    }
+
     view() {
         if (this.isInErrorState) {
             return (
@@ -485,6 +519,7 @@ class Board {
                     <div
                         id="view-pane"
                         class={classnames({ unlocked: this.shouldPanZoom, locked: !this.shouldPanZoom })}
+                        onwheel={(e: any) => this.onWheel(e)}
                         onmousemove={(e: MouseEvent) => this.mouseMove(e)}
                         onmouseup={(e: MouseEvent) => this.mouseUp(e)}
                         onmousedown={(e: MouseEvent) => this.mouseDown({

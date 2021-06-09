@@ -44,6 +44,7 @@ body {
 
 .view-container {
     background-color: cadetblue;
+    height: 100%;
     /* transform: matrix(1,0,0,1,50,50); */
 }
 
