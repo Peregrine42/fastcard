@@ -29,6 +29,9 @@
         "@types/mithril": "^2.0.7",
         "@types/react": "^17.0.9",
         "@types/react-dom": "^17.0.6",
+        "@types/toastr": "^2.1.38",
+        "@types/tough-cookie": "^4.0.0",
+        "@wdio/cli": "^7.7.3",
         "@wdio/spec-reporter": "^7.6.0",
         "argon2": "^0.27.2",
         "babel-loader": "^8.2.2",
@@ -58,11 +61,12 @@
         "form-data": "^4.0.0",
         "immutability-helper": "^3.1.1",
         "mithril": "^2.0.4",
-        "node-html-parser": "^3.3.4",
-        "panzoom": "^9.4.2",
+        "node-html-parser": "^3.3.5",
         "nudged": "^1.5.0",
+        "panzoom": "^9.4.2",
         "serialize-error": "^8.1.0",
         "socket.io-client": "^4.1.2",
+        "toastr": "^2.1.4",
         "tough-cookie": "^4.0.0"
     }
 }

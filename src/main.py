@@ -313,8 +313,16 @@ def sign_in_form():
     return render_template(
         'sign-in.html.j2',
         username=form.username.data or "",
-        form=form
+        form=form,
+        success=get_flashed_messages(category_filter='success')
     )
+
+
+@app.post("/sign-out")
+@auth
+def sign_out(payload):
+    session['id'] = None
+    return redirect(url_for('root'))
 
 
 @app.get("/protected/<path:name>")

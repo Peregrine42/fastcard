@@ -7,6 +7,7 @@ import classnames from "classnames"
 // @ts-ignore
 import nudged from "nudged"
 import { serializeError } from "serialize-error"
+import toastr from "toastr"
 
 const log = async (...args: any[]) => {
     console.log(...args)
@@ -251,7 +252,7 @@ class Board {
         this.draggingCardId = null
         this.offset = [0, 0]
         this.isDown = false
-        this.shouldPanZoom = false
+        this.shouldPanZoom = true
         this.panning = false
         this.angle = 0
         this.fullscreen = false
@@ -290,10 +291,52 @@ class Board {
             await this.reload(vnode)
         }, 1000))
 
+        const success = document.getElementById("success")
+        if (success) {
+            const message = success.innerHTML
+            success.innerHTML = ""
+            toastr.success(message, "Success!", {
+                positionClass: "toast-bottom-center"
+            })
+        }
+
         await this.reload(vnode)
     }
 
     async reload(vnode: VnodeDOM<{}>) {
+        const supportsTouch = 'ontouchstart' in window || navigator.msMaxTouchPoints;
+        if (supportsTouch && !this.fullscreen) {
+            toastr.info(`
+            <div style="font-size: 40px">
+                Touchscreen devices work best in fullscreen mode.
+                <button style="font-size: 40px" id="info-button"> 
+                    Go fullscreen
+                </button>
+                <p>(You can exit fullscreen at any time)</p>
+            </div>
+        `, 'Info', {
+                timeOut: 0,
+                toastClass: 'toaster-center-inner',
+                iconClass: 'hidden',
+                hideDuration: 0,
+                extendedTimeOut: 0,
+                positionClass: 'toaster-center',
+                preventDuplicates: true,
+                onShown: () => {
+                    const el = document.getElementById("info-button")
+                    if (el) {
+                        el.addEventListener("click", async () => {
+                            document.body.requestFullscreen()
+                            this.fullscreen = true
+                            this.reload(vnode)
+                        })
+                    }
+                }
+            })
+        }
+
+        if (supportsTouch && !this.fullscreen) return
+
         const dom = vnode.dom as HTMLElement
         const child = dom.getElementsByClassName("view-container")[0] as HTMLElement
         const transformArray = this.parseTransform(window.location.hash.slice(1))
@@ -359,7 +402,7 @@ class Board {
         })
 
         this.socket.on("disconnect", () => {
-            this.isInErrorState = true
+            this.showErrorState()
             m.redraw()
         })
 
@@ -480,11 +523,38 @@ class Board {
                     })
                 } catch (e) {
                     console.error(e)
-                    this.isInErrorState = true
+                    this.showErrorState()
                 }
             }
             this.draggingCardId = null
         }
+    }
+
+    showErrorState() {
+        this.isInErrorState = true
+        toastr.error(`
+            Something went wrong. 
+            Please 
+            <button id="error-button"> 
+                reload the page
+            </button> to continue.
+        `, 'Error', {
+            timeOut: 0,
+            hideDuration: 0,
+            extendedTimeOut: 0,
+            positionClass: 'toast-bottom-center',
+            tapToDismiss: false,
+            preventDuplicates: true,
+            onShown: () => {
+                const el = document.getElementById("error-button")
+                if (el) {
+                    el.addEventListener("click", async () => {
+                        await axios.get("/status")
+                        location.reload()
+                    })
+                }
+            }
+        })
     }
 
     async mouseMove(
@@ -577,20 +647,14 @@ class Board {
     }
 
     view() {
-        if (this.isInErrorState) {
-            return (
-                <div>Something went wrong. Please <button onclick={async () => {
-                    await axios.get("/")
-                    location.reload()
-                }}>reload the page</button> to continue where you left off.</div>
-            )
-        }
-
         return (
             <div>
                 <div id="view-inner">
                     <div
                         id="view-pane"
+                        class={classnames({
+                            error: this.isInErrorState
+                        })}
                         onwheel={(e: any) => this.onWheel(e)}
                         onmousemove={(e: MouseEvent) => this.mouseMove(e)}
                         onmouseup={(e: MouseEvent) => this.mouseUp(e)}
@@ -719,6 +783,7 @@ class Board {
                     </div>
                 </div>
                 <button
+                    disabled={this.isInErrorState}
                     class="button"
                     onclick={(e: MouseEvent) => {
                         this.shouldPanZoom = !this.shouldPanZoom
@@ -728,6 +793,7 @@ class Board {
                     {this.shouldPanZoom ? "Move pieces" : "Pan/Zoom"}
                 </button>
                 <button
+                    disabled={this.isInErrorState}
                     class="button"
                     style={{ bottom: "0px", display: this.shouldPanZoom ? "initial" : "none" }}
                     onclick={() => {
@@ -743,6 +809,7 @@ class Board {
                     Fullscreen
                 </button>
                 <button
+                    disabled={this.isInErrorState}
                     style={{ left: "50%", transform: "translate(-50%, 0%)", display: this.shouldPanZoom ? "initial" : "none" }}
                     onclick={async () => {
                         this.nudgedPanZoomRotate?.rotate()
@@ -750,6 +817,20 @@ class Board {
                     class="button"
                 >
                     Rotate
+                </button>
+                <button
+                    style={{ left: "100%", transform: "translate(-100%, 0%)" }}
+                    onclick={async () => {
+                        await axios.post("/sign-out", null, {
+                            headers: {
+                                'X-CSRF-TOKEN': this.csrf
+                            }
+                        })
+                        window.location.href = "/"
+                    }}
+                    class="button"
+                >
+                    Sign out
                 </button>
             </div >
         )
