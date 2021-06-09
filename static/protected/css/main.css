@@ -42,6 +42,11 @@ body {
     height: calc(100% - 10px);
 }
 
+.view-container {
+    background-color: cadetblue;
+    /* transform: matrix(1,0,0,1,50,50); */
+}
+
 .button {
     position: fixed;
 }

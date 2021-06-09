@@ -6,6 +6,9 @@ import m, { Vnode, VnodeDOM } from "mithril"
 import panzoom, { PanZoom } from "panzoom"
 import classnames from "classnames"
 
+// @ts-ignore
+import nudged from "nudged"
+
 const log = async (...args: any[]) => {
     console.log(...args)
     await axios.post("/log", {
@@ -27,6 +30,49 @@ interface ServerCard {
     details: {
         z?: number
         name?: string
+    }
+}
+
+class NudgedPanZoomRotate {
+    currentTransform: any = null
+    beforeDragTransform: any = null
+    dom: any
+    startPanX: number = 0
+    startPanY: number = 0
+    panning: boolean = false
+
+    constructor(dom: any) {
+        this.dom = dom
+    }
+
+    init() {
+        this.currentTransform = nudged.Transform.IDENTITY
+        this.beforeDragTransform = nudged.Transform.IDENTITY
+        this.sync()
+    }
+
+    sync() {
+        const { a, b, c, d, e, f } = this.currentTransform.getMatrix()
+        this.dom.style.transform = `matrix(${a}, ${b}, ${c}, ${d}, ${e}, ${f})`
+    }
+
+    startPan(e: any) {
+        this.startPanX = e.clientX
+        this.startPanY = e.clientY
+        this.beforeDragTransform = nudged.createFromArray(this.currentTransform.toArray())
+        this.panning = true
+    }
+
+    continuePan(e: any) {
+        this.currentTransform = this.beforeDragTransform.translateBy(
+            e.clientX - this.startPanX,
+            e.clientY - this.startPanY
+        )
+        this.sync()
+    }
+
+    endPan() {
+        this.panning = false
     }
 }
 
@@ -65,6 +111,7 @@ class Board {
     angle: number
     fullscreen: boolean
     isInErrorState: boolean
+    nudgedPanZoomRotate: null | NudgedPanZoomRotate
 
     constructor(_vnode: Vnode) {
         this.cards = {}
@@ -77,6 +124,7 @@ class Board {
         this.angle = 0
         this.fullscreen = false
         this.isInErrorState = false
+        this.nudgedPanZoomRotate = null
     }
 
     stringifyTransform(transform: any, angle: number, shouldPanZoom: boolean) {
@@ -119,23 +167,26 @@ class Board {
 
         this.angle = angle
 
-        this.pz = panzoom(child as HTMLElement, {
-            smoothScroll: false,
-            zoomDoubleClickSpeed: 1,
-            initialX: x,
-            initialY: y,
-            initialZoom: scale
-        })
+        this.nudgedPanZoomRotate = new NudgedPanZoomRotate(child)
+        this.nudgedPanZoomRotate.init()
 
-        this.pz.moveTo(x, y)
+        // this.pz = panzoom(child as HTMLElement, {
+        //     smoothScroll: false,
+        //     zoomDoubleClickSpeed: 1,
+        //     initialX: x,
+        //     initialY: y,
+        //     initialZoom: scale
+        // })
 
-        if (!this.shouldPanZoom) {
-            this.pz.pause()
-        }
+        // this.pz.moveTo(x, y)
 
-        this.pz.on("transform", throttle(() => {
-            window.location.hash = this.stringifyTransform(this.pz?.getTransform(), this.angle, this.shouldPanZoom)
-        }, 300))
+        // if (!this.shouldPanZoom) {
+        //     // this.pz.pause()
+        // }
+
+        // this.pz.on("transform", throttle(() => {
+        //     window.location.hash = this.stringifyTransform(this.pz?.getTransform(), this.angle, this.shouldPanZoom)
+        // }, 300))
 
         const cardUpdateCallback = ({ fromUserId, cardUpdates: newStates }: { fromUserId: number, cardUpdates: any }) => {
             const command: any = {}
@@ -151,18 +202,18 @@ class Board {
                             typeof (s.y) !== "undefined"
                         ) {
                             const { x: camX, y: camY, scale } = this.pz?.getTransform() || { x: 0, y: 0, scale: 1 }
-                            const [x, y] = rotate((innerWidth / 2 - camX) / scale, (innerHeight / 2 - camY) / scale, s.x, s.y, this.angle)
-                            command[card.id]["realX"] = {
+                            // const [x, y] = rotate((innerWidth / 2 - camX) / scale, (innerHeight / 2 - camY) / scale, s.x, s.y, this.angle)
+                            // command[card.id]["realX"] = {
+                            //     $set: s.x
+                            // }
+                            // command[card.id]["realY"] = {
+                            //     $set: s.y
+                            // }
+                            command[card.id]["x"] = {
                                 $set: s.x
                             }
-                            command[card.id]["realY"] = {
-                                $set: s.y
-                            }
-                            command[card.id]["x"] = {
-                                $set: x
-                            }
                             command[card.id]["y"] = {
-                                $set: y
+                                $set: s.y
                             }
                         }
                         if (typeof (s.z) !== "undefined") {
@@ -222,18 +273,18 @@ class Board {
             cards = Object.values(this.cards) as Card[]
         }
 
-        const { x: camX, y: camY, scale } = this.pz?.getTransform() || { x: 0, y: 0, scale: 1 }
-        const [newX, newY] = rotate(0, 0, camX, camY, this.angle)
-        const cs = cards.map(card => {
-            const [x, y] = rotate(((innerWidth / 2)) / scale - camX, ((innerHeight / 2)) / scale - camY, card.realX, card.realY, this.angle)
+        // const { x: camX, y: camY, scale } = this.pz?.getTransform() || { x: 0, y: 0, scale: 1 }
+        // const [newX, newY] = rotate(0, 0, camX, camY, this.angle)
+        // const cs = cards.map(card => {
+        //     const [x, y] = rotate(((innerWidth / 2)) / scale - camX, ((innerHeight / 2)) / scale - camY, card.realX, card.realY, this.angle)
 
-            card.x = x
-            card.y = y
-            return card
-        })
+        //     card.x = x
+        //     card.y = y
+        //     return card
+        // })
 
         const cardsById: any = {}
-        cs.forEach(c => cardsById[c.id] = c)
+        cards.forEach(c => cardsById[c.id] = c)
 
         this.setCards(cardsById)
     }
@@ -254,6 +305,11 @@ class Board {
                 return -1
             }
         })
+    }
+
+    mouseDown(e: any) {
+        if (!this.shouldPanZoom) return
+        this.nudgedPanZoomRotate?.startPan(e)
     }
 
     mouseDownFor(
@@ -288,7 +344,11 @@ class Board {
             clientY: number
         }
     ) {
-        if (this.shouldPanZoom) return
+        if (this.shouldPanZoom) {
+            if (this.nudgedPanZoomRotate?.panning) {
+                this.nudgedPanZoomRotate?.endPan()
+            }
+        }
         e.stopImmediatePropagation()
         if (!this.isDown) return
         this.isDown = false
@@ -298,18 +358,18 @@ class Board {
 
             if (card) {
                 const { x: camX, y: camY, scale } = this.pz?.getTransform() || { x: 0, y: 0, scale: 1 }
-                const [x, y] = rotate((innerWidth / 2 - camX) / scale, (innerHeight / 2 - camY) / scale, card.x, card.y, -this.angle)
+                // const [x, y] = rotate((innerWidth / 2 - camX) / scale, (innerHeight / 2 - camY) / scale, card.x, card.y, -this.angle)
 
-                card.realX = x
-                card.realY = y
+                // card.realX = x
+                // card.realY = y
 
                 try {
                     await axios.post("/current-user/cards", {
                         cardUpdates: [
                             {
                                 id: this.draggingCardId,
-                                x: x,
-                                y: y
+                                x: card.x,
+                                y: card.y
                             }
                         ]
                     }, {
@@ -334,7 +394,11 @@ class Board {
             clientY: number
         }
     ) {
-        if (this.shouldPanZoom) return
+        if (this.shouldPanZoom) {
+            if (this.nudgedPanZoomRotate?.panning) {
+                this.nudgedPanZoomRotate?.continuePan(e)
+            }
+        }
         e.stopImmediatePropagation()
         e.preventDefault();
         if (this.isDown && this.draggingCardId) {
@@ -423,6 +487,13 @@ class Board {
                         class={classnames({ unlocked: this.shouldPanZoom, locked: !this.shouldPanZoom })}
                         onmousemove={(e: MouseEvent) => this.mouseMove(e)}
                         onmouseup={(e: MouseEvent) => this.mouseUp(e)}
+                        onmousedown={(e: MouseEvent) => this.mouseDown({
+                            clientX: e.clientX || 0,
+                            clientY: e.clientY || 0,
+                            stopImmediatePropagation: e.stopImmediatePropagation.bind(e),
+                            preventDefault: e.preventDefault.bind(e),
+                            target: e.target as HTMLElement
+                        })}
                         ontouchmove={(e: TouchEvent) => {
                             this.mouseMove({
                                 clientX: e.touches[0]?.clientX || 0,
@@ -445,7 +516,7 @@ class Board {
                                         return (
                                             <div
                                                 style={{
-                                                    transform: `translate(-50%, -50%) rotate(${-this.angle}deg)`,
+                                                    transform: `translate(-50%, -50%)`,
                                                     top: c.y + "px",
                                                     left: c.x + "px"
                                                 }}
