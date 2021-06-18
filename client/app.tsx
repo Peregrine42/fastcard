@@ -36,7 +36,6 @@ interface ServerCard {
 class NudgedPanZoomRotate {
     currentTransform: any = null
     beforeDragTransform: any = null
-    dom: any
     startPanX: number = 0
     startPanY: number = 0
     startTouches: any[] = []
@@ -52,8 +51,7 @@ class NudgedPanZoomRotate {
     animationCallback: any;
     animationStartTransform: any;
 
-    constructor(dom: any, onTransform: any) {
-        this.dom = dom
+    constructor(onTransform: any) {
         this.onTransform = onTransform
     }
 
@@ -111,8 +109,6 @@ class NudgedPanZoomRotate {
     }
 
     async sync(isDone = false) {
-        const { a, b, c, d, e, f } = this.currentTransform.getMatrix()
-        this.dom.style.transform = `matrix(${a}, ${b}, ${c}, ${d}, ${e}, ${f})`
         if (this.onTransform) this.onTransform()
         if (isDone) this.committedTransform = nudged.createFromArray(this.currentTransform.toArray())
     }
@@ -262,6 +258,47 @@ class NudgedPanZoomRotate {
     }
 }
 
+class Canvas {
+    dom: any
+    ctx: any
+
+    constructor(dom: any) {
+        this.dom = dom
+    }
+
+    render({ a, b, c, d, e, f }: any, points: any[]) {
+        if (!this.dom) return
+        resizeCanvasToDisplaySize(this.dom)
+        if (!this.ctx) {
+            this.ctx = this.dom.getContext("2d")
+        }
+
+        this.ctx.clearRect(0, 0, this.dom.width, this.dom.height)
+        this.ctx.save()
+
+        this.ctx.translate(innerWidth / 2, innerHeight / 2)
+
+        this.ctx.transform(
+            a, b, c, d, e, f
+        )
+
+        points.forEach(point => {
+            const x = point.x - (innerWidth / 2)
+            const y = point.y - (innerHeight / 2)
+            this.ctx.beginPath()
+            this.ctx.arc(x, y, 50, 0, 2 * Math.PI)
+            this.ctx.fillStyle = "#333333"
+            this.ctx.fill()
+            this.ctx.lineWidth = 15
+            this.ctx.strokeStyle = "#aaa"
+            this.ctx.stroke()
+
+        })
+
+        this.ctx.restore()
+    }
+}
+
 class Card {
     id: number
     name: string
@@ -299,6 +336,7 @@ class Board {
     nudgedPanZoomRotate: null | NudgedPanZoomRotate
     touches: any[] = []
     fullscreenToastr: any
+    dom: any
 
     constructor(_vnode: Vnode) {
         this.cards = {}
@@ -358,41 +396,13 @@ class Board {
     }
 
     async reload(vnode: VnodeDOM<{}>) {
-        // const supportsTouch = 'ontouchstart' in window || navigator.msMaxTouchPoints;
-        // if (supportsTouch && !this.fullscreen) {
-        //     this.fullscreenToastr = toastr.info(`
-        //     <div style="font-size: 40px">
-        //         Touchscreen devices work best in fullscreen mode.
-        //         <button style="font-size: 40px" id="info-button"> 
-        //             Go fullscreen
-        //         </button>
-        //         <p>(You can exit fullscreen at any time)</p>
-        //     </div>
-        // `, 'Info', {
-        //         timeOut: 0,
-        //         toastClass: 'toaster-center-inner',
-        //         iconClass: 'hidden',
-        //         hideDuration: 0,
-        //         extendedTimeOut: 0,
-        //         positionClass: 'toaster-center',
-        //         preventDuplicates: true,
-        //         onShown: () => {
-        //             const el = document.getElementById("info-button")
-        //             if (el) {
-        //                 el.addEventListener("click", async () => {
-        //                     document.body.requestFullscreen()
-        //                     this.fullscreen = true
-        //                 })
-        //             }
-        //         }
-        //     })
-        // }
-
-        const dom = vnode.dom as HTMLElement
-        const child = dom.getElementsByClassName("view-container")[0] as HTMLElement
+        console.log(vnode.dom)
+        const dom = vnode.dom
+        const child = dom.getElementsByClassName("view-pane")[0] as HTMLElement
+        this.dom = new Canvas(child as HTMLElement)
         const transformArray = this.parseTransform(window.location.hash.slice(1))
 
-        this.nudgedPanZoomRotate = new NudgedPanZoomRotate(child, throttle(() => {
+        this.nudgedPanZoomRotate = new NudgedPanZoomRotate(throttle(() => {
             location.hash = this.stringifyTransform(this.nudgedPanZoomRotate?.currentTransform.toArray(), this.shouldPanZoom)
         }, 300))
 
@@ -706,14 +716,16 @@ class Board {
     }
 
     view(vnode: VnodeDOM) {
+        this.dom?.render(
+            this.nudgedPanZoomRotate?.currentTransform.getMatrix(),
+            this.cs
+        )
         return (
             <div>
                 <div id="view-inner">
-                    <div
+                    <canvas
                         id="view-pane"
-                        class={classnames({
-                            error: this.isInErrorState
-                        })}
+                        class="view-pane"
                         onwheel={(e: any) => this.onWheel(e)}
                         onmousemove={(e: MouseEvent) => this.mouseMove(e)}
                         onmouseup={(e: MouseEvent) => this.mouseUp(e)}
@@ -802,47 +814,7 @@ class Board {
                             }
                         }}
                     >
-                        <div id="view-container" class="view-container">
-                            {
-                                (() => {
-                                    return this.cs.map((c: any) => {
-                                        return (
-                                            <div
-                                                style={{
-                                                    transform: `translate(-50%, -50%)`,
-                                                    top: c.y + "px",
-                                                    left: c.x + "px"
-                                                }}
-                                                className={classnames({
-                                                    "card": true,
-                                                    "card-transition": (
-                                                        !(this.panning) &&
-                                                        !(this.draggingCardId === c.id)
-                                                    )
-                                                })}
-                                                key={c.id}
-                                                onmousedown={(e: MouseEvent) => this.mouseDownFor(c, {
-                                                    clientX: e.clientX || 0,
-                                                    clientY: e.clientY || 0,
-                                                    stopImmediatePropagation: e.stopImmediatePropagation.bind(e),
-                                                    preventDefault: e.preventDefault.bind(e),
-                                                    target: e.target as HTMLElement
-                                                })}
-                                                ontouchstart={(e: TouchEvent) => this.mouseDownFor(c, {
-                                                    clientX: e.touches[0]?.clientX || 0,
-                                                    clientY: e.touches[0]?.clientY || 0,
-                                                    stopImmediatePropagation: e.stopImmediatePropagation.bind(e),
-                                                    preventDefault: e.preventDefault.bind(e),
-                                                    target: e.touches[0]?.target as HTMLElement
-                                                })}
-                                            >
-                                            </div>
-                                        )
-                                    })
-                                })()
-                            }
-                        </div>
-                    </div>
+                    </canvas>
                 </div>
                 <button
                     disabled={this.isInErrorState}
@@ -928,6 +900,21 @@ const initApp = async () => {
         //@ts-ignore
         Board
     );
+}
+
+function resizeCanvasToDisplaySize(canvas: any) {
+    // look up the size the canvas is being displayed
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+
+    // If it's resolution does not match change it
+    if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+        return true;
+    }
+
+    return false;
 }
 
 initApp()
