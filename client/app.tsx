@@ -44,33 +44,77 @@ class NudgedPanZoomRotate {
     onTransform: any
     pointers: any = {}
     committedTransform: any
-    // totalTransform: any
+    animationDurationStep = 100; //in miliseconds
+    animationDuration: number = 0;
+    startValue: null | number = null;
+    endValue: null | number = null;
+    startTime: null | number = null;
+    animationCallback: any;
+    animationStartTransform: any;
 
     constructor(dom: any, onTransform: any) {
         this.dom = dom
         this.onTransform = onTransform
     }
 
-    init() {
+    async init() {
         this.currentTransform = nudged.Transform.IDENTITY
         this.beforeDragTransform = nudged.Transform.IDENTITY
-        this.sync(true)
+        await this.sync(true)
     }
 
-    setTransform(transformArray: number[] | null) {
+    async setTransform(transformArray: number[] | null) {
         if (!transformArray) this.currentTransform = nudged.Transform.IDENTITY
         else {
             this.currentTransform = nudged.createFromArray(transformArray)
         }
-        this.sync(true)
+        await this.sync(true)
     }
 
-    sync(isDone = false) {
+    onAnimationFrame(callback: any) {
+        this.animationCallback = callback;
+    }
+
+    animate(done: any, currentTime: number) {
+        if (this.endValue === null || this.startValue === null) throw new Error('Animation start and end are null')
+        if (this.startTime === null) this.startTime = currentTime;
+        var elapsedTime = currentTime - this.startTime;
+
+        if (elapsedTime < this.animationDuration) {
+            const currentValue = Math.floor((elapsedTime / this.animationDuration) * (this.endValue - this.startValue));
+
+            this.currentTransform = this.animationStartTransform.rotateBy(
+                currentValue * Math.PI / 180, [0, 0]
+            )
+
+            this.sync()
+
+            if (this.animationCallback) {
+                this.animationCallback(currentValue)
+            }
+
+            window.requestAnimationFrame((time) => this.animate(done, time));
+        } else {
+            this.currentTransform = this.animationStartTransform.rotateBy(
+                this.endValue * Math.PI / 180, [0, 0]
+            )
+            this.sync(true)
+
+            this.animationCallback(this.endValue)
+            this.onTransform();
+            this.startTime = null;
+            this.startValue = null;
+            this.endValue = null;
+            this.animationDuration = 0;
+            done()
+        }
+    }
+
+    async sync(isDone = false) {
         const { a, b, c, d, e, f } = this.currentTransform.getMatrix()
         this.dom.style.transform = `matrix(${a}, ${b}, ${c}, ${d}, ${e}, ${f})`
         if (this.onTransform) this.onTransform()
         if (isDone) this.committedTransform = nudged.createFromArray(this.currentTransform.toArray())
-
     }
 
     startPan(e: any) {
@@ -80,31 +124,40 @@ class NudgedPanZoomRotate {
         this.panning = true
     }
 
-    continuePan(e: any) {
+    async continuePan(e: any) {
         this.currentTransform = this.beforeDragTransform.translateBy(
             e.clientX - this.startPanX,
             e.clientY - this.startPanY
         )
-        this.sync(true)
+        await this.sync(true)
     }
 
-    endPan() {
+    async endPan() {
         this.panning = false
-        this.sync(true)
+        await this.sync(true)
     }
 
-    onWheel(e: any) {
+    async onWheel(e: any) {
         const direction = e.deltaY > 0 ? 1.1 : 0.9
         const [x, y] = this.currentTransform.inverse().transform([e.clientX - (innerWidth / 2), e.clientY - (innerHeight / 2)])
 
         const newTransform = nudged.Transform.IDENTITY.scaleBy(direction, [x, y])
         this.currentTransform = this.currentTransform.multiplyBy(newTransform)
-        this.sync(true)
+        await this.sync(true)
     }
 
-    rotate() {
-        this.currentTransform = this.currentTransform.rotateBy(45 / 180 * Math.PI, [0, 0])
-        this.sync(true)
+    async rotate() {
+        return new Promise(res => {
+            if (this.endValue === null) {
+                this.startValue = 0
+                this.endValue = 45
+                this.animationStartTransform = nudged.createFromArray(this.currentTransform.toArray())
+                window.requestAnimationFrame((time) => this.animate(res, time));
+            } else {
+                this.endValue += 45
+            }
+            this.animationDuration += this.animationDurationStep;
+        })
     }
 
     touchDragStart(touches: any[]) {
@@ -119,7 +172,7 @@ class NudgedPanZoomRotate {
         this.panning = true
     }
 
-    touchDrag(touches: any[]) {
+    async touchDrag(touches: any[]) {
         const domain = this.startTouches.map(t => [t.clientX, t.clientY])
         touches.sort((a, b) => {
             if (a.identifier < b.identifier) {
@@ -137,7 +190,7 @@ class NudgedPanZoomRotate {
                 return 1
             }
         })
-        this.sync(true)
+        await this.sync(true)
     }
 
     startTouch(id: any, x: any, y: any) {
@@ -146,20 +199,20 @@ class NudgedPanZoomRotate {
         this.updateTransform()
     }
 
-    continueTouch(id: any, x: any, y: any) {
+    async continueTouch(id: any, x: any, y: any) {
         if (this.pointers.hasOwnProperty(id)) {
             this.pointers[id].rx = x
             this.pointers[id].ry = y
-            this.updateTransform()
+            await this.updateTransform()
         }
     }
 
-    endTouch(id: any, x: any, y: any) {
-        this.commit()
+    async endTouch(id: any, x: any, y: any) {
+        await this.commit()
         delete this.pointers[id]
     }
 
-    commit() {
+    async commit() {
         // Move ongoing transformation to the committed transformation so that
         // the total transformation stays the same.
 
@@ -185,10 +238,10 @@ class NudgedPanZoomRotate {
         t = nudged.estimateTS(domain, range)
         this.committedTransform = t.multiplyBy(this.committedTransform)
         this.currentTransform = this.committedTransform
-        this.sync(true)
+        await this.sync(true)
     }
 
-    updateTransform() {
+    async updateTransform() {
         // Calculate the total transformation from the committed transformation
         // and the points of the ongoing transformation.
 
@@ -205,7 +258,7 @@ class NudgedPanZoomRotate {
         // Calculate ongoing transform and combine it with the committed.
         t = nudged.estimateTS(domain, range)
         this.currentTransform = t.multiplyBy(this.committedTransform)
-        this.sync()
+        await this.sync()
     }
 }
 
@@ -245,6 +298,7 @@ class Board {
     isInErrorState: boolean
     nudgedPanZoomRotate: null | NudgedPanZoomRotate
     touches: any[] = []
+    fullscreenToastr: any
 
     constructor(_vnode: Vnode) {
         this.cards = {}
@@ -304,38 +358,35 @@ class Board {
     }
 
     async reload(vnode: VnodeDOM<{}>) {
-        const supportsTouch = 'ontouchstart' in window || navigator.msMaxTouchPoints;
-        if (supportsTouch && !this.fullscreen) {
-            toastr.info(`
-            <div style="font-size: 40px">
-                Touchscreen devices work best in fullscreen mode.
-                <button style="font-size: 40px" id="info-button"> 
-                    Go fullscreen
-                </button>
-                <p>(You can exit fullscreen at any time)</p>
-            </div>
-        `, 'Info', {
-                timeOut: 0,
-                toastClass: 'toaster-center-inner',
-                iconClass: 'hidden',
-                hideDuration: 0,
-                extendedTimeOut: 0,
-                positionClass: 'toaster-center',
-                preventDuplicates: true,
-                onShown: () => {
-                    const el = document.getElementById("info-button")
-                    if (el) {
-                        el.addEventListener("click", async () => {
-                            document.body.requestFullscreen()
-                            this.fullscreen = true
-                            this.reload(vnode)
-                        })
-                    }
-                }
-            })
-        }
-
-        if (supportsTouch && !this.fullscreen) return
+        // const supportsTouch = 'ontouchstart' in window || navigator.msMaxTouchPoints;
+        // if (supportsTouch && !this.fullscreen) {
+        //     this.fullscreenToastr = toastr.info(`
+        //     <div style="font-size: 40px">
+        //         Touchscreen devices work best in fullscreen mode.
+        //         <button style="font-size: 40px" id="info-button"> 
+        //             Go fullscreen
+        //         </button>
+        //         <p>(You can exit fullscreen at any time)</p>
+        //     </div>
+        // `, 'Info', {
+        //         timeOut: 0,
+        //         toastClass: 'toaster-center-inner',
+        //         iconClass: 'hidden',
+        //         hideDuration: 0,
+        //         extendedTimeOut: 0,
+        //         positionClass: 'toaster-center',
+        //         preventDuplicates: true,
+        //         onShown: () => {
+        //             const el = document.getElementById("info-button")
+        //             if (el) {
+        //                 el.addEventListener("click", async () => {
+        //                     document.body.requestFullscreen()
+        //                     this.fullscreen = true
+        //                 })
+        //             }
+        //         }
+        //     })
+        // }
 
         const dom = vnode.dom as HTMLElement
         const child = dom.getElementsByClassName("view-container")[0] as HTMLElement
@@ -344,9 +395,16 @@ class Board {
         this.nudgedPanZoomRotate = new NudgedPanZoomRotate(child, throttle(() => {
             location.hash = this.stringifyTransform(this.nudgedPanZoomRotate?.currentTransform.toArray(), this.shouldPanZoom)
         }, 300))
+
+        this.nudgedPanZoomRotate.onAnimationFrame(() => {
+            m.redraw()
+        })
+
         this.nudgedPanZoomRotate.init()
 
-        this.nudgedPanZoomRotate.setTransform(transformArray)
+        if (transformArray) {
+            await this.nudgedPanZoomRotate.setTransform(transformArray)
+        }
 
         const cardUpdateCallback = ({ fromUserId, cardUpdates: newStates }: { fromUserId: number, cardUpdates: any }) => {
             const command: any = {}
@@ -496,7 +554,7 @@ class Board {
     ) {
         if (this.shouldPanZoom) {
             if (this.nudgedPanZoomRotate?.panning) {
-                this.nudgedPanZoomRotate?.endPan()
+                await this.nudgedPanZoomRotate?.endPan()
             }
         }
         e.stopImmediatePropagation()
@@ -568,7 +626,8 @@ class Board {
     ) {
         if (this.shouldPanZoom) {
             if (this.nudgedPanZoomRotate?.panning && pan) {
-                return this.nudgedPanZoomRotate?.continuePan(e)
+                await this.nudgedPanZoomRotate?.continuePan(e)
+                return
             }
         }
         e.stopImmediatePropagation()
@@ -640,13 +699,13 @@ class Board {
         }
     }
 
-    onWheel(e: any) {
+    async onWheel(e: any) {
         if (this.shouldPanZoom) {
-            this.nudgedPanZoomRotate?.onWheel(e)
+            await this.nudgedPanZoomRotate?.onWheel(e)
         }
     }
 
-    view() {
+    view(vnode: VnodeDOM) {
         return (
             <div>
                 <div id="view-inner">
@@ -668,6 +727,7 @@ class Board {
                             })
                         }}
                         ontouchstart={(e: TouchEvent) => {
+                            e.preventDefault()
                             if (this.shouldPanZoom) {
                                 Array.from(e.changedTouches).forEach(t => {
                                     if (!this.touches.map(to => to.identifier).includes(t.identifier)) {
@@ -689,9 +749,11 @@ class Board {
                                 })
                             }
                         }}
-                        ontouchmove={(e: TouchEvent) => {
+                        ontouchmove={async (e: TouchEvent) => {
+                            e.preventDefault()
                             if (this.shouldPanZoom) {
-                                Array.from(e.changedTouches).forEach(t => {
+                                for (let i = 0; i < e.changedTouches.length; i += 1) {
+                                    const t = e.changedTouches[i]
                                     if (!this.touches.map(to => to.identifier).includes(t.identifier)) {
                                         this.nudgedPanZoomRotate?.startTouch(
                                             t.identifier,
@@ -700,13 +762,13 @@ class Board {
                                         )
                                         this.touches.push({ identifier: t.identifier })
                                     } else {
-                                        this.nudgedPanZoomRotate?.continueTouch(
+                                        await this.nudgedPanZoomRotate?.continueTouch(
                                             t.identifier,
                                             t.clientX - (innerWidth / 2),
                                             t.clientY - (innerHeight / 2),
                                         )
                                     }
-                                })
+                                }
                             } else {
                                 this.mouseMove({
                                     clientX: e.touches[0]?.clientX || 0,
@@ -716,19 +778,20 @@ class Board {
                                 }, false)
                             }
                         }}
-                        ontouchend={(e: TouchEvent) => {
+                        ontouchend={async (e: TouchEvent) => {
+                            e.preventDefault()
                             if (this.shouldPanZoom) {
-                                Array.from(e.changedTouches).forEach(t => {
-                                    const index = this.touches.findIndex(to => to.identifier === t.identifier)
-                                    if (index > -1) {
-                                        this.nudgedPanZoomRotate?.endTouch(
+                                for (let i = 0; i < e.changedTouches.length; i += 1) {
+                                    const t = e.changedTouches[i]
+                                    if (i > -1) {
+                                        await this.nudgedPanZoomRotate?.endTouch(
                                             t.identifier,
                                             t.clientX - (innerWidth / 2),
                                             t.clientY - (innerHeight / 2),
                                         )
-                                        this.touches.splice(index, 1)
+                                        this.touches.splice(i, 1)
                                     }
-                                })
+                                }
                             } else {
                                 this.mouseUp({
                                     clientX: e.touches[0]?.clientX || 0,
@@ -773,7 +836,6 @@ class Board {
                                                     target: e.touches[0]?.target as HTMLElement
                                                 })}
                                             >
-                                                {c.id}
                                             </div>
                                         )
                                     })
@@ -863,6 +925,7 @@ const initApp = async () => {
 
     m.mount(
         document.getElementById('view') as HTMLElement,
+        //@ts-ignore
         Board
     );
 }
