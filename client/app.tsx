@@ -2,7 +2,6 @@ import axios from "axios"
 import update from 'immutability-helper'
 import { io, Socket } from 'socket.io-client'
 import m, { Vnode, VnodeDOM } from "mithril"
-import classnames from "classnames"
 
 // @ts-ignore
 import nudged from "nudged"
@@ -30,6 +29,7 @@ interface ServerCard {
     details: {
         z?: number
         name?: string
+        type?: string
     }
 }
 
@@ -43,16 +43,18 @@ class NudgedPanZoomRotate {
     onTransform: any
     pointers: any = {}
     committedTransform: any
-    animationDurationStep = 100; //in miliseconds
+    animationDurationStep = 150; //in miliseconds
     animationDuration: number = 0;
     startValue: null | number = null;
     endValue: null | number = null;
     startTime: null | number = null;
     animationCallback: any;
     animationStartTransform: any;
+    animator: Animator
 
-    constructor(onTransform: any) {
+    constructor(onTransform: any, animator: Animator) {
         this.onTransform = onTransform
+        this.animator = animator
     }
 
     async init() {
@@ -73,38 +75,15 @@ class NudgedPanZoomRotate {
         this.animationCallback = callback;
     }
 
-    animate(done: any, currentTime: number) {
-        if (this.endValue === null || this.startValue === null) throw new Error('Animation start and end are null')
-        if (this.startTime === null) this.startTime = currentTime;
-        var elapsedTime = currentTime - this.startTime;
+    animateRotation(ani: Animation, currentValue: number) {
+        this.currentTransform = ani.startState.transform.rotateBy(
+            currentValue * Math.PI / 180, [0, 0]
+        )
 
-        if (elapsedTime < this.animationDuration) {
-            const currentValue = Math.floor((elapsedTime / this.animationDuration) * (this.endValue - this.startValue));
+        this.sync(true)
 
-            this.currentTransform = this.animationStartTransform.rotateBy(
-                currentValue * Math.PI / 180, [0, 0]
-            )
-
-            this.sync()
-
-            if (this.animationCallback) {
-                this.animationCallback(currentValue)
-            }
-
-            window.requestAnimationFrame((time) => this.animate(done, time));
-        } else {
-            this.currentTransform = this.animationStartTransform.rotateBy(
-                this.endValue * Math.PI / 180, [0, 0]
-            )
-            this.sync(true)
-
-            this.animationCallback(this.endValue)
-            this.onTransform();
-            this.startTime = null;
-            this.startValue = null;
-            this.endValue = null;
-            this.animationDuration = 0;
-            done()
+        if (this.animationCallback) {
+            this.animationCallback(currentValue)
         }
     }
 
@@ -144,15 +123,29 @@ class NudgedPanZoomRotate {
 
     async rotate() {
         return new Promise(res => {
-            if (this.endValue === null) {
-                this.startValue = 0
-                this.endValue = 45
-                this.animationStartTransform = nudged.createFromArray(this.currentTransform.toArray())
-                window.requestAnimationFrame((time) => this.animate(res, time));
+            const currentAni = this.animator.animations.find(ani => ani.name === "view-rotate")
+            if (currentAni) {
+                if (currentAni.endValue === null) {
+                    currentAni.endValue = 45
+                    currentAni.duration = this.animationDurationStep;
+                } else {
+                    currentAni.endValue += 45
+                    currentAni.duration += this.animationDurationStep;
+                }
             } else {
-                this.endValue += 45
+                this.animator.start({
+                    elapsedTime: 0,
+                    duration: this.animationDurationStep,
+                    startValue: 0,
+                    endValue: 45,
+                    name: "view-rotate",
+                    startState: {
+                        transform: nudged.createFromArray(this.currentTransform.toArray())
+                    },
+                    callback: (ani: Animation, currentValue: number) => this.animateRotation(ani, currentValue),
+                    done: res
+                })
             }
-            this.animationDuration += this.animationDurationStep;
         })
     }
 
@@ -283,19 +276,197 @@ class Canvas {
         )
 
         points.forEach(point => {
-            const x = point.x - (innerWidth / 2)
-            const y = point.y - (innerHeight / 2)
-            this.ctx.beginPath()
-            this.ctx.arc(x, y, 50, 0, 2 * Math.PI)
-            this.ctx.fillStyle = "#333333"
-            this.ctx.fill()
-            this.ctx.lineWidth = 15
-            this.ctx.strokeStyle = "#aaa"
-            this.ctx.stroke()
-
+            point.render(this.ctx)
         })
 
         this.ctx.restore()
+    }
+}
+
+class HitCanvas {
+    dom: any
+    targetDom: any
+    ctx: any
+    objs: any[] = []
+    colorMap: any[] = []
+
+    constructor(dom: any, targetDom: any) {
+        this.dom = dom
+        this.targetDom = targetDom
+    }
+
+    setObjects(objs: any[]) {
+        this.objs = objs
+        this.colorMap = this.objs.map((o, C) => {
+            const rgb = this.getRGB(C)
+            return [o, rgb]
+        })
+    }
+
+    getRGB(i: number) {
+        const C = i + 1
+        const B = C % 256
+        const G = ((C - B) / 256) % 256
+        const R = ((C - B) / Math.pow(256, 2)) - G / 256
+
+        return `${R},${G},${B}`
+    }
+
+    getObjectAt(x: number, y: number) {
+        const [R, G, B] = this.ctx.getImageData(x, y, 1, 1).data;
+        const color = `${R},${G},${B}`
+        const i = this.colorMap.findIndex(([o, c]) => {
+            return c === color
+        })
+
+        if (i > -1) {
+            return this.colorMap[i][0]
+        } else {
+            return null
+        }
+    }
+
+    render({ a, b, c, d, e, f }: any, points: any[]) {
+        if (!this.dom) return
+        resizeCanvasToDisplaySize(
+            this.dom,
+            this.targetDom.clientWidth,
+            this.targetDom.clientHeight
+        )
+        if (!this.ctx) {
+            this.ctx = this.dom.getContext("2d")
+        }
+
+        this.ctx.clearRect(0, 0, this.dom.width, this.dom.height)
+        this.ctx.save()
+
+        this.ctx.translate(innerWidth / 2, innerHeight / 2)
+
+        this.ctx.transform(
+            a, b, c, d, e, f
+        )
+
+        points.forEach(point => {
+            if (point.hitRender) {
+                const index = this.colorMap.findIndex(([o, c]) => {
+                    return o === point
+                })
+
+                if (index > -1) {
+                    const [_o, color] = this.colorMap[index]
+
+                    point.hitRender(this.ctx, color)
+                } else {
+                    console.error("not found in color map")
+                }
+            }
+        })
+
+        this.ctx.restore()
+    }
+}
+
+interface Animation {
+    name: string
+    callback?: any
+    done?: any
+    startValue: number | null
+    endValue: number | null
+    startTime?: number | null
+    duration: number
+    elapsedTime?: number
+    startState: any
+}
+
+class Animator {
+    animations: Animation[] = []
+    running = false
+
+    frame(currentTime: number) {
+        this.animations.forEach((ani) => {
+            if (ani.endValue === null || ani.startValue === null) throw new Error('Animation start and end are null')
+            if (ani.startTime === null || typeof ani.startTime === "undefined") ani.startTime = currentTime
+            if ((typeof (ani.elapsedTime) !== "undefined") && (ani.elapsedTime < ani.duration)) {
+                ani.elapsedTime = currentTime - ani.startTime
+                const currentValue = Math.floor((ani.elapsedTime / ani.duration) * (ani.endValue - ani.startValue))
+                if (ani.callback) ani.callback(ani, currentValue)
+            } else {
+                if (ani.callback) ani.callback(ani, ani.endValue)
+                ani.startTime = null;
+                ani.startValue = null;
+                ani.endValue = null;
+                ani.duration = 0;
+                if (ani.done) ani.done()
+            }
+        })
+
+        this.animations = this.animations.filter(ani => ani.startTime !== null)
+
+        if (this.animations.length > 0) {
+            window.requestAnimationFrame((time) => this.frame(time));
+        }
+    }
+
+    start(ani: Animation) {
+        this.animations.push(ani)
+        if (!this.running) {
+            window.requestAnimationFrame((time) => {
+                this.frame(time)
+            })
+        }
+    }
+}
+
+interface ServerShape {
+    id: number
+    details: {
+        points?: number[],
+        z?: number,
+        name?: string
+    }
+}
+
+class Shape {
+    id: number
+    name: string
+    points: Card[] | number[]
+    x: number = 0
+    y: number = 0
+    z: number
+    type = "shape"
+
+    constructor({ id, details }: ServerShape) {
+        this.id = id
+        this.z = details.z || 0
+        this.points = details.points || []
+        this.name = details.name || "Untitled"
+    }
+
+    render(ctx: any) {
+        ctx.save()
+        ctx.beginPath()
+        for (let i = 0; i < this.points.length; i += 1) {
+            if (typeof this.points[i] !== "number") {
+                const point = this.points[i] as unknown as Card
+                const x = point.getX() - (innerWidth / 2)
+                const y = point.getY() - (innerHeight / 2)
+                if (i === 0) {
+                    ctx.moveTo(x, y)
+                } else {
+                    ctx.lineTo(x, y)
+                }
+            }
+        }
+        const point = this.points[0] as unknown as Card
+        const x = point.x - (innerWidth / 2)
+        const y = point.y - (innerHeight / 2)
+        ctx.lineTo(x, y)
+        ctx.lineWidth = 15
+        ctx.strokeStyle = "#333"
+        ctx.stroke()
+        ctx.fillStyle = "orange"
+        ctx.fill()
+        ctx.restore()
     }
 }
 
@@ -305,17 +476,70 @@ class Card {
     x: number
     y: number
     z: number
-    realX: number
-    realY: number
+    startX?: number
+    startY?: number
+    animationX?: number
+    animationY?: number
+    type = "card"
 
     constructor(c: ServerCard) {
         this.id = c.id
-        this.name = c.details.name || "Untitled Card"
+        this.name = c.details.name || "Untitled"
         this.x = c.x
         this.y = c.y
-        this.realX = c.x
-        this.realY = c.y
         this.z = c.details.z || 0
+    }
+
+    getX() {
+        if (
+            typeof (this.startX) !== "undefined" &&
+            typeof (this.startY) !== "undefined" &&
+            typeof (this.animationX) !== "undefined"
+        ) {
+            return this.animationX
+        } else {
+            return this.x
+        }
+    }
+
+    getY() {
+        if (
+            typeof (this.startX) !== "undefined" &&
+            typeof (this.startY) !== "undefined" &&
+            typeof (this.animationY) !== "undefined"
+        ) {
+            return this.animationY
+        } else {
+            return this.y
+        }
+    }
+
+    render(ctx: any) {
+        ctx.save()
+        const x = this.getX() - (innerWidth / 2)
+        const y = this.getY() - (innerHeight / 2)
+        ctx.beginPath()
+        ctx.arc(x, y, 50, 0, 2 * Math.PI)
+        ctx.fillStyle = "#aaa"
+        ctx.fill()
+        ctx.lineWidth = 15
+        ctx.strokeStyle = "#333"
+        ctx.stroke()
+        ctx.restore()
+    }
+
+    hitRender(ctx: any, color: string) {
+        ctx.save()
+        const x = this.getX() - (innerWidth / 2)
+        const y = this.getY() - (innerHeight / 2)
+        ctx.beginPath()
+        ctx.arc(x, y, 50, 0, 2 * Math.PI)
+        ctx.fillStyle = `rgb(${color})`
+        ctx.fill()
+        ctx.lineWidth = 15
+        ctx.strokeStyle = `rgb(${color})`
+        ctx.stroke()
+        ctx.restore()
     }
 }
 
@@ -337,6 +561,8 @@ class Board {
     touches: any[] = []
     fullscreenToastr: any
     dom: any
+    hitDom: any
+    animator: Animator
 
     constructor(_vnode: Vnode) {
         this.cards = {}
@@ -350,6 +576,7 @@ class Board {
         this.fullscreen = false
         this.isInErrorState = false
         this.nudgedPanZoomRotate = null
+        this.animator = new Animator()
     }
 
     stringifyTransform(transform: any, shouldPanZoom: boolean) {
@@ -395,16 +622,26 @@ class Board {
         await this.reload(vnode)
     }
 
+    within(val: number, target: number, margin: number) {
+        return (
+            val > (target - margin) && val < (target + margin)
+        )
+    }
+
     async reload(vnode: VnodeDOM<{}>) {
-        console.log(vnode.dom)
         const dom = vnode.dom
         const child = dom.getElementsByClassName("view-pane")[0] as HTMLElement
+        const hitCanvasChild = dom.getElementsByClassName("view-hit-canvas")[0] as HTMLElement
         this.dom = new Canvas(child as HTMLElement)
+        this.hitDom = new HitCanvas(
+            hitCanvasChild as HTMLElement,
+            child as HTMLElement
+        )
         const transformArray = this.parseTransform(window.location.hash.slice(1))
 
         this.nudgedPanZoomRotate = new NudgedPanZoomRotate(throttle(() => {
             location.hash = this.stringifyTransform(this.nudgedPanZoomRotate?.currentTransform.toArray(), this.shouldPanZoom)
-        }, 300))
+        }, 300), this.animator)
 
         this.nudgedPanZoomRotate.onAnimationFrame(() => {
             m.redraw()
@@ -434,6 +671,21 @@ class Board {
                             }
                             command[card.id]["y"] = {
                                 $set: s.y + (innerHeight / 2)
+                            }
+
+                            const sx = s.x + (innerWidth / 2)
+                            const sy = s.y + (innerHeight / 2)
+
+                            if (
+                                (!this.within(card.x, sx, 5)) ||
+                                (!this.within(card.y, sy, 5))
+                            ) {
+                                command[card.id]["startX"] = {
+                                    $set: card.x
+                                }
+                                command[card.id]["startY"] = {
+                                    $set: card.y
+                                }
                             }
                         }
                         if (typeof (s.z) !== "undefined") {
@@ -485,25 +737,30 @@ class Board {
         if (initialCardsResponse) {
             const initialCards = [...initialCardsResponse.data.cards] as ServerCard[]
             cards = initialCards.map(c => {
-                const card = new Card(c)
+                let card
+                if (c.details.type === "shape") {
+                    card = new Shape(c)
+                } else {
+                    card = new Card(c)
+                }
                 return card
             })
         } else {
             cards = Object.values(this.cards) as Card[]
         }
 
-
         const cs = cards.map(card => {
             if (this.nudgedPanZoomRotate) {
                 card.x = card.x + (innerWidth / 2)
                 card.y = card.y + (innerHeight / 2)
-
                 return card
             }
         })
 
         const cardsById: any = {}
-        cs.forEach(c => { if (c) { cardsById[c.id] = c } })
+        cs.forEach(c => {
+            if (c) { cardsById[c.id] = c }
+        })
 
         this.setCards(cardsById)
     }
@@ -515,7 +772,6 @@ class Board {
 
     setCards(newCards: any) {
         this.cards = newCards
-
         this.cs = Object.values(this.cards)
         this.cs.sort((a: any, b: any) => {
             if (a.z > b.z) {
@@ -524,11 +780,64 @@ class Board {
                 return -1
             }
         })
+
+        this.cs.forEach(c => {
+            if (c?.type === "shape") {
+                const shape = c as unknown as Shape
+                shape.points.forEach((pointOrId, i) => {
+                    if (typeof pointOrId === "number") {
+                        shape.points.splice(i, 1, this.cards[pointOrId])
+                    } else {
+                        shape.points.splice(i, 1, this.cards[pointOrId.id])
+                    }
+                })
+            } else if (c?.type === "card") {
+                if (typeof (c.startX) !== "undefined" && typeof (c.startY) !== "undefined") {
+                    const currentAni = this.animator.animations.find((ani) => ani.name === `card-update-${c.id}`)
+                    if (!currentAni) {
+                        this.animator.start({
+                            elapsedTime: 0,
+                            name: `card-update-${c.id}`,
+                            startState: {},
+                            duration: 150,
+                            startValue: 0,
+                            endValue: 1000,
+                            callback: (_ani: any, currentValue: number) => {
+                                const dx = c.x - c.startX
+                                const dy = c.y - c.startY
+
+                                const scaledDx = dx * (currentValue / 1000)
+                                const scaledDy = dy * (currentValue / 1000)
+
+                                c.animationX = c.startX + scaledDx
+                                c.animationY = c.startY + scaledDy
+
+                                this.render()
+                            },
+                            done: () => {
+                                c.animationX = undefined
+                                c.animationY = undefined
+                                c.startX = undefined
+                                c.startY = undefined
+                            }
+                        })
+                    }
+                }
+            }
+        })
+
+        this.hitDom.setObjects(this.cs)
     }
 
     mouseDown(e: any) {
-        if (!this.shouldPanZoom) return
-        this.nudgedPanZoomRotate?.startPan(e)
+        if (this.shouldPanZoom) {
+            this.nudgedPanZoomRotate?.startPan(e)
+        } else {
+            const obj = this.hitDom.getObjectAt(e.clientX, e.clientY)
+            if (obj) {
+                this.mouseDownFor(obj, e)
+            }
+        }
     }
 
     mouseDownFor(
@@ -545,7 +854,9 @@ class Board {
         e.stopImmediatePropagation()
         this.isDown = true
 
-        const [x, y] = this.nudgedPanZoomRotate?.currentTransform.transform([(e.target).offsetLeft, (e.target).offsetTop])
+        const [x, y] = this.nudgedPanZoomRotate?.currentTransform.transform(
+            [c.x, c.y]
+        )
 
         this.offset = [
             x - (e.clientX),
@@ -601,12 +912,12 @@ class Board {
     showErrorState() {
         this.isInErrorState = true
         toastr.error(`
-            Something went wrong. 
+            Server disconnected. 
             Please 
             <button id="error-button"> 
                 reload the page
             </button> to continue.
-        `, 'Error', {
+        `, 'Disconnect', {
             timeOut: 0,
             hideDuration: 0,
             extendedTimeOut: 0,
@@ -665,25 +976,28 @@ class Board {
 
             const zChanges: any = {}
             const cardList = Object.values(movedCards)
-            cardList.forEach((c: any) => {
-                if (c.id === card.id) {
-                    if (c.z !== cardList.length - 1) {
+            if (card.type === "card") {
+                cardList.forEach((c: any) => {
+                    if (c.id === card.id) {
+                        if (c.z !== cardList.length - 1) {
+                            zChanges[c.id] = {
+                                z: {
+                                    $set: cardList.length - 1
+                                }
+                            }
+                        }
+                    } else if (c.z <= card.z) {
+                        return
+                    } else if (c.z > card.z) {
                         zChanges[c.id] = {
                             z: {
-                                $set: cardList.length - 1
+                                $set: c.z - 1
                             }
                         }
                     }
-                } else if (c.z <= card.z) {
-                    return
-                } else if (c.z > card.z) {
-                    zChanges[c.id] = {
-                        z: {
-                            $set: c.z - 1
-                        }
-                    }
-                }
-            })
+                })
+
+            }
             const zCards = update(movedCards, zChanges)
             this.setCards(zCards)
 
@@ -715,14 +1029,29 @@ class Board {
         }
     }
 
-    view(vnode: VnodeDOM) {
+    render() {
         this.dom?.render(
             this.nudgedPanZoomRotate?.currentTransform.getMatrix(),
             this.cs
         )
+        this.hitDom?.render(
+            this.nudgedPanZoomRotate?.currentTransform.getMatrix(),
+            this.cs
+        )
+    }
+
+    view(vnode: VnodeDOM) {
+        this.render()
         return (
             <div>
                 <div id="view-inner">
+                    <canvas
+                        id="view-hit-canvas"
+                        class="view-hit-canvas"
+                        style={{
+                            display: "none"
+                        }}
+                    ></canvas>
                     <canvas
                         id="view-pane"
                         class="view-pane"
@@ -902,10 +1231,15 @@ const initApp = async () => {
     );
 }
 
-function resizeCanvasToDisplaySize(canvas: any) {
+function resizeCanvasToDisplaySize(canvas: any, widthOverride?: number, heightOverride?: number) {
     // look up the size the canvas is being displayed
-    const width = canvas.clientWidth;
-    const height = canvas.clientHeight;
+    let width = canvas.clientWidth;
+    let height = canvas.clientHeight;
+
+    if (typeof (widthOverride) !== "undefined" && typeof (heightOverride) !== "undefined") {
+        width = widthOverride
+        height = heightOverride
+    }
 
     // If it's resolution does not match change it
     if (canvas.width !== width || canvas.height !== height) {
