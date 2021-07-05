@@ -16,11 +16,7 @@
             "@babel/plugin-transform-runtime"
         ],
         [
-            "@babel/plugin-transform-react-jsx",
-            {
-                "pragma": "m",
-                "pragmaFrag": "'['"
-            }
+            "@babel/plugin-transform-react-jsx"
         ]
     ]
 }

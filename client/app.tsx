@@ -1,26 +1,12 @@
-import axios from "axios"
-import update from 'immutability-helper'
-import { io, Socket } from 'socket.io-client'
-import m, { Vnode, VnodeDOM } from "mithril"
+import axios, { AxiosResponse } from "axios"
+import update, { Spec } from "immutability-helper"
+import { io, Socket } from "socket.io-client"
+import React, { Component, createRef, RefObject } from "react"
+import ReactDOM from "react-dom"
 
-// @ts-ignore
 import nudged from "nudged"
-import { serializeError } from "serialize-error"
 import toastr from "toastr"
-
-const log = async (...args: any[]) => {
-    console.log(...args)
-    const csrfEl = document.getElementById("csrf_token") as HTMLElement
-    const csrf = csrfEl.getAttribute("value") || ""
-
-    await axios.post("/log", {
-        message: args.map(a => serializeError(a, { maxDepth: 50 }))
-    }, {
-        headers: {
-            'X-CSRF-TOKEN': csrf
-        }
-    })
-}
+import { resizeCanvasToDisplaySize } from "./util/resizeCanvasToDisplaySize"
 
 interface ServerCard {
     id: number
@@ -33,50 +19,78 @@ interface ServerCard {
     }
 }
 
-class NudgedPanZoomRotate {
-    currentTransform: any = null
-    beforeDragTransform: any = null
-    startPanX: number = 0
-    startPanY: number = 0
-    startTouches: any[] = []
-    panning: boolean = false
-    onTransform: any
-    pointers: any = {}
-    committedTransform: any
-    animationDurationStep = 150; //in miliseconds
-    animationDuration: number = 0;
-    startValue: null | number = null;
-    endValue: null | number = null;
-    startTime: null | number = null;
-    animationCallback: any;
-    animationStartTransform: any;
-    animator: Animator
+interface NudgedTransform {
+    translateBy: (x: number, y: number) => NudgedTransform
+    rotateBy: (value: number, point: number[]) => NudgedTransform
+    multiplyBy: (transform: NudgedTransform) => NudgedTransform
+    inverse: () => NudgedTransform
+    toArray: () => number[]
+    transform: (point: number[]) => number[]
+    getMatrix: () => { a: number, b: number, c: number, d: number, e: number, f: number }
+}
 
-    constructor(onTransform: any, animator: Animator) {
-        this.onTransform = onTransform
+interface NudgedPanZoomRotateTouch {
+    identifier: number
+    clientX: number
+    clientY: number
+}
+
+interface NudgedPanZoomRotateTouchDiff {
+    dx: number,
+    dy: number,
+    rx: number,
+    ry: number
+}
+
+class NudgedPanZoomRotate {
+    currentTransform?: NudgedTransform
+    beforeDragTransform?: NudgedTransform
+    animationStartTransform?: NudgedTransform;
+    startPanX = 0
+    startPanY = 0
+    startTouches: NudgedPanZoomRotateTouch[] = []
+    panning = false
+    pointers: { [identifier: string]: NudgedPanZoomRotateTouchDiff } = {}
+    committedTransform?: NudgedTransform
+    animationDurationStep = 150; // in miliseconds
+    animationDuration = 0;
+    startValue: null | number = null
+    endValue: null | number = null
+    startTime: null | number = null
+    animator: Animator
+    animationCallback?: (currentValue: number) => void
+    onTransform?: () => void
+
+    constructor(animator: Animator) {
         this.animator = animator
     }
 
-    async init() {
-        this.currentTransform = nudged.Transform.IDENTITY
-        this.beforeDragTransform = nudged.Transform.IDENTITY
-        await this.sync(true)
+    setTransformCallback(onTransform: () => void) {
+        this.onTransform = onTransform
     }
 
-    async setTransform(transformArray: number[] | null) {
+    init() {
+        this.currentTransform = nudged.Transform.IDENTITY
+        this.beforeDragTransform = nudged.Transform.IDENTITY
+        this.sync(true)
+    }
+
+    setTransform(transformArray: number[] | null) {
         if (!transformArray) this.currentTransform = nudged.Transform.IDENTITY
         else {
             this.currentTransform = nudged.createFromArray(transformArray)
         }
-        await this.sync(true)
+        if (this.onTransform) this.onTransform()
+        this.sync(true)
     }
 
-    onAnimationFrame(callback: any) {
+    onAnimationFrame(callback: () => void) {
         this.animationCallback = callback;
     }
 
     animateRotation(ani: Animation, currentValue: number) {
-        this.currentTransform = ani.startState.transform.rotateBy(
+        const startState = (ani.startState as { transform: NudgedTransform })
+        this.currentTransform = startState.transform.rotateBy(
             currentValue * Math.PI / 180, [0, 0]
         )
 
@@ -87,42 +101,60 @@ class NudgedPanZoomRotate {
         }
     }
 
-    async sync(isDone = false) {
-        if (this.onTransform) this.onTransform()
+    sync(isDone = false) {
+        if (!this.currentTransform) return
         if (isDone) this.committedTransform = nudged.createFromArray(this.currentTransform.toArray())
     }
 
-    startPan(e: any) {
+    startPan(e: {
+        clientX: number,
+        clientY: number
+    }) {
         this.startPanX = e.clientX
         this.startPanY = e.clientY
-        this.beforeDragTransform = nudged.createFromArray(this.currentTransform.toArray())
+        if (this.currentTransform) {
+            this.beforeDragTransform = nudged.createFromArray(
+                this.currentTransform.toArray()
+            )
+        }
         this.panning = true
     }
 
-    async continuePan(e: any) {
-        this.currentTransform = this.beforeDragTransform.translateBy(
-            e.clientX - this.startPanX,
-            e.clientY - this.startPanY
-        )
-        await this.sync(true)
+    continuePan(e: {
+        clientX: number,
+        clientY: number
+    }) {
+        if (this.beforeDragTransform) {
+            this.currentTransform = this.beforeDragTransform.translateBy(
+                e.clientX - this.startPanX,
+                e.clientY - this.startPanY
+            )
+        }
+        this.sync(true)
     }
 
-    async endPan() {
+    endPan() {
         this.panning = false
-        await this.sync(true)
+        this.sync(true)
     }
 
-    async onWheel(e: any) {
+    onWheel(e: {
+        deltaY: number,
+        clientX: number,
+        clientY: number
+    }) {
         const direction = e.deltaY > 0 ? 1.1 : 0.9
-        const [x, y] = this.currentTransform.inverse().transform([e.clientX - (innerWidth / 2), e.clientY - (innerHeight / 2)])
+        if (this.currentTransform) {
+            const [x, y] = this.currentTransform.inverse().transform([e.clientX - (innerWidth / 2), e.clientY - (innerHeight / 2)])
+            const newTransform = nudged.Transform.IDENTITY.scaleBy(direction, [x, y])
+            this.currentTransform = this.currentTransform.multiplyBy(newTransform)
+        }
 
-        const newTransform = nudged.Transform.IDENTITY.scaleBy(direction, [x, y])
-        this.currentTransform = this.currentTransform.multiplyBy(newTransform)
-        await this.sync(true)
+        this.sync(true)
     }
 
     async rotate() {
-        return new Promise(res => {
+        return new Promise<void>(res => {
             const currentAni = this.animator.animations.find(ani => ani.name === "view-rotate")
             if (currentAni) {
                 if (currentAni.endValue === null) {
@@ -133,6 +165,7 @@ class NudgedPanZoomRotate {
                     currentAni.duration += this.animationDurationStep;
                 }
             } else {
+                if (!this.currentTransform) return
                 this.animator.start({
                     elapsedTime: 0,
                     duration: this.animationDurationStep,
@@ -149,7 +182,7 @@ class NudgedPanZoomRotate {
         })
     }
 
-    touchDragStart(touches: any[]) {
+    touchDragStart(touches: NudgedPanZoomRotateTouch[]) {
         this.startTouches = touches.map(t => { return { ...t } }).sort((a, b) => {
             if (a.identifier < b.identifier) {
                 return -1
@@ -157,11 +190,13 @@ class NudgedPanZoomRotate {
                 return 1
             }
         })
-        this.beforeDragTransform = nudged.createFromArray(this.currentTransform.toArray())
+        if (this.beforeDragTransform && this.currentTransform) {
+            this.beforeDragTransform = nudged.createFromArray(this.currentTransform.toArray())
+        }
         this.panning = true
     }
 
-    async touchDrag(touches: any[]) {
+    touchDrag(touches: { identifier: number, clientX: number, clientY: number }[]) {
         const domain = this.startTouches.map(t => [t.clientX, t.clientY])
         touches.sort((a, b) => {
             if (a.identifier < b.identifier) {
@@ -171,7 +206,9 @@ class NudgedPanZoomRotate {
             }
         })
         const range = touches.map(t => [t.clientX, t.clientY])
-        this.currentTransform = this.currentTransform.multiplyBy(nudged.estimate("TS", domain, range))
+        if (this.currentTransform) {
+            this.currentTransform = this.currentTransform.multiplyBy(nudged.estimate("TS", domain, range))
+        }
         this.startTouches = touches.map(t => { return { ...t } }).sort((a, b) => {
             if (a.identifier < b.identifier) {
                 return -1
@@ -179,24 +216,24 @@ class NudgedPanZoomRotate {
                 return 1
             }
         })
-        await this.sync(true)
+        this.sync(true)
     }
 
-    startTouch(id: any, x: any, y: any) {
+    startTouch(id: number, x: number, y: number) {
         this.commit()
         this.pointers[id] = { dx: x, dy: y, rx: x, ry: y }
         this.updateTransform()
     }
 
-    async continueTouch(id: any, x: any, y: any) {
-        if (this.pointers.hasOwnProperty(id)) {
+    async continueTouch(id: number, x: number, y: number) {
+        if (this.pointers[id]) {
             this.pointers[id].rx = x
             this.pointers[id].ry = y
             await this.updateTransform()
         }
     }
 
-    async endTouch(id: any, x: any, y: any) {
+    async endTouch(id: number) {
         await this.commit()
         delete this.pointers[id]
     }
@@ -207,12 +244,11 @@ class NudgedPanZoomRotate {
 
         // Commit ongoingTransformation. As a result
         // the domain and range of all pointers become equal.
-        let id: any, p: any, domain: any, range: any, t: any
-        domain = []
-        range = []
-        for (id in this.pointers) {
-            if (this.pointers.hasOwnProperty(id)) {
-                p = this.pointers[id]
+        const domain = []
+        const range = []
+        for (const id in this.pointers) {
+            if (this.pointers[id]) {
+                const p = this.pointers[id]
                 domain.push([p.dx, p.dy])
                 range.push([p.rx, p.ry]) // copies
                 // Move transformation from current pointers;
@@ -224,46 +260,65 @@ class NudgedPanZoomRotate {
         // Calculate the transformation to commit and commit it by
         // combining it with the previous transformations. Total transform
         // then becomes identical with the commited ones.
-        t = nudged.estimateTS(domain, range)
+        const t = nudged.estimateTS(domain, range)
         this.committedTransform = t.multiplyBy(this.committedTransform)
-        this.currentTransform = this.committedTransform
-        await this.sync(true)
+        this.sync(true)
     }
 
     async updateTransform() {
         // Calculate the total transformation from the committed transformation
         // and the points of the ongoing transformation.
 
-        let id: any, p, domain: any, range: any, t
-        domain = []
-        range = []
+        let id: string
+        const domain = []
+        const range = []
         for (id in this.pointers) {
-            if (this.pointers.hasOwnProperty(id)) {
-                p = this.pointers[id]
+            if (this.pointers[id]) {
+                const p = this.pointers[id]
                 domain.push([p.dx, p.dy])
                 range.push([p.rx, p.ry])
             }
         }
         // Calculate ongoing transform and combine it with the committed.
-        t = nudged.estimateTS(domain, range)
+        const t = nudged.estimateTS(domain, range)
         this.currentTransform = t.multiplyBy(this.committedTransform)
         await this.sync()
     }
 }
 
-class Canvas {
-    dom: any
-    ctx: any
+interface NudgedMatrix {
+    a: number,
+    b: number,
+    c: number,
+    d: number,
+    e: number,
+    f: number
+}
 
-    constructor(dom: any) {
+interface Point {
+    id: number
+    render: (ctx: CanvasRenderingContext2D) => void
+    hitRender?: (ctx: CanvasRenderingContext2D, color: string) => void
+    type: string
+}
+
+class Canvas {
+    dom?: HTMLCanvasElement
+    ctx?: CanvasRenderingContext2D
+
+    setDOM(dom: HTMLCanvasElement) {
         this.dom = dom
     }
 
-    render({ a, b, c, d, e, f }: any, points: any[]) {
+    render({ a, b, c, d, e, f }: NudgedMatrix, points: Point[]) {
         if (!this.dom) return
         resizeCanvasToDisplaySize(this.dom)
         if (!this.ctx) {
-            this.ctx = this.dom.getContext("2d")
+            this.ctx = this.dom.getContext("2d") || undefined
+        }
+
+        if (!this.ctx) {
+            throw new Error("Could not find or create context")
         }
 
         this.ctx.clearRect(0, 0, this.dom.width, this.dom.height)
@@ -276,7 +331,9 @@ class Canvas {
         )
 
         points.forEach(point => {
-            point.render(this.ctx)
+            if (this.ctx) {
+                point.render(this.ctx)
+            }
         })
 
         this.ctx.restore()
@@ -284,23 +341,23 @@ class Canvas {
 }
 
 class HitCanvas {
-    dom: any
-    targetDom: any
-    ctx: any
-    objs: any[] = []
-    colorMap: any[] = []
+    dom?: HTMLCanvasElement
+    targetDom?: HTMLCanvasElement
+    ctx?: CanvasRenderingContext2D
+    colorMap: { obj: Point, rgb: string }[] = []
 
-    constructor(dom: any, targetDom: any) {
-        this.dom = dom
-        this.targetDom = targetDom
+    setObjects(objs: Point[]) {
+        this.colorMap = objs.map((o, C) => {
+            const rgb = this.getRGB(C)
+            return { obj: o, rgb }
+        })
     }
 
-    setObjects(objs: any[]) {
-        this.objs = objs
-        this.colorMap = this.objs.map((o, C) => {
-            const rgb = this.getRGB(C)
-            return [o, rgb]
-        })
+    setDOM(value: HTMLCanvasElement) {
+        this.dom = value
+    }
+    setTargetDOM(value: HTMLCanvasElement) {
+        this.targetDom = value
     }
 
     getRGB(i: number) {
@@ -313,28 +370,34 @@ class HitCanvas {
     }
 
     getObjectAt(x: number, y: number) {
+        if (!this.ctx) throw new Error("Could not find canvas context")
         const [R, G, B] = this.ctx.getImageData(x, y, 1, 1).data;
         const color = `${R},${G},${B}`
-        const i = this.colorMap.findIndex(([o, c]) => {
+        const i = this.colorMap.findIndex(({ rgb: c }) => {
             return c === color
         })
 
         if (i > -1) {
-            return this.colorMap[i][0]
+            return this.colorMap[i].obj
         } else {
             return null
         }
     }
 
-    render({ a, b, c, d, e, f }: any, points: any[]) {
+    render({ a, b, c, d, e, f }: NudgedMatrix, points: Point[]) {
         if (!this.dom) return
+        if (!this.targetDom) return
         resizeCanvasToDisplaySize(
             this.dom,
             this.targetDom.clientWidth,
             this.targetDom.clientHeight
         )
         if (!this.ctx) {
-            this.ctx = this.dom.getContext("2d")
+            this.ctx = this.dom.getContext("2d") || undefined
+        }
+
+        if (!this.ctx) {
+            throw new Error("Could not find or create context")
         }
 
         this.ctx.clearRect(0, 0, this.dom.width, this.dom.height)
@@ -348,16 +411,18 @@ class HitCanvas {
 
         points.forEach(point => {
             if (point.hitRender) {
-                const index = this.colorMap.findIndex(([o, c]) => {
-                    return o === point
+                const index = this.colorMap.findIndex(({ obj: o }) => {
+                    return o.id === point.id
                 })
 
                 if (index > -1) {
-                    const [_o, color] = this.colorMap[index]
+                    const color = this.colorMap[index].rgb
 
-                    point.hitRender(this.ctx, color)
+                    if (this.ctx) {
+                        point.hitRender(this.ctx, color)
+                    }
                 } else {
-                    console.error("not found in color map")
+                    console.error(point, this.colorMap, "not found in color map")
                 }
             }
         })
@@ -368,14 +433,14 @@ class HitCanvas {
 
 interface Animation {
     name: string
-    callback?: any
-    done?: any
+    callback?: (ani: Animation, currentValue: number) => void
+    done?: () => void
     startValue: number | null
     endValue: number | null
     startTime?: number | null
     duration: number
     elapsedTime?: number
-    startState: any
+    startState: unknown
 }
 
 class Animator {
@@ -384,7 +449,7 @@ class Animator {
 
     frame(currentTime: number) {
         this.animations.forEach((ani) => {
-            if (ani.endValue === null || ani.startValue === null) throw new Error('Animation start and end are null')
+            if (ani.endValue === null || ani.startValue === null) throw new Error("Animation start and end are null")
             if (ani.startTime === null || typeof ani.startTime === "undefined") ani.startTime = currentTime
             if ((typeof (ani.elapsedTime) !== "undefined") && (ani.elapsedTime < ani.duration)) {
                 ani.elapsedTime = currentTime - ani.startTime
@@ -430,9 +495,13 @@ class Shape {
     id: number
     name: string
     points: Card[] | number[]
-    x: number = 0
-    y: number = 0
-    z: number
+    x = 0
+    y = 0
+    startX = 0
+    startY = 0
+    animationX = undefined
+    animationY = undefined
+    z = -1
     type = "shape"
 
     constructor({ id, details }: ServerShape) {
@@ -442,7 +511,7 @@ class Shape {
         this.name = details.name || "Untitled"
     }
 
-    render(ctx: any) {
+    render(ctx: CanvasRenderingContext2D) {
         ctx.save()
         ctx.beginPath()
         for (let i = 0; i < this.points.length; i += 1) {
@@ -514,7 +583,7 @@ class Card {
         }
     }
 
-    render(ctx: any) {
+    render(ctx: CanvasRenderingContext2D) {
         ctx.save()
         const x = this.getX() - (innerWidth / 2)
         const y = this.getY() - (innerHeight / 2)
@@ -528,7 +597,7 @@ class Card {
         ctx.restore()
     }
 
-    hitRender(ctx: any, color: string) {
+    hitRender(ctx: CanvasRenderingContext2D, color: string) {
         ctx.save()
         const x = this.getX() - (innerWidth / 2)
         const y = this.getY() - (innerHeight / 2)
@@ -543,44 +612,80 @@ class Card {
     }
 }
 
-class Board {
+interface Touch {
+    identifier: number
+}
+
+interface ServerCardUpdate {
+    cardGrabs?: number[]
+    cardDrops?: number[]
+    cardFlips?: number[]
+    cardShuffles?: number[]
+    cardUpdates?: {
+        id: number
+        x?: number
+        y?: number
+        z?: number
+    }[]
+}
+
+type CardIndex = { [id: string]: (Card | Shape) }
+
+class Board extends Component {
     userId?: number
     csrf?: string
     socket?: Socket
-    cards: any
     draggingCardId: number | null
     offset: [number, number]
     isDown: boolean
-    cs: any[]
-    shouldPanZoom: boolean
     panning: boolean
     angle: number
     fullscreen: boolean
     isInErrorState: boolean
-    nudgedPanZoomRotate: null | NudgedPanZoomRotate
-    touches: any[] = []
-    fullscreenToastr: any
-    dom: any
-    hitDom: any
+    nudgedPanZoomRotate: NudgedPanZoomRotate
+    touches: Touch[] = []
+    dom: RefObject<HTMLDivElement>
+    canvas: Canvas
+    hitCanvas: HitCanvas
     animator: Animator
+    state: {
+        cards: CardIndex,
+        cs: (Card | Shape)[],
+        domTransform?: NudgedMatrix,
+        shouldPanZoom: boolean
+    }
+    onPanZoomRotate = throttle(() => {
+        if (this.nudgedPanZoomRotate.currentTransform) {
+            location.hash = this.stringifyTransform(this.nudgedPanZoomRotate.currentTransform.toArray(), this.state.shouldPanZoom)
+        }
+    }, 300)
 
-    constructor(_vnode: Vnode) {
-        this.cards = {}
-        this.cs = []
+    constructor(props: Record<string, never>) {
+        super(props)
         this.draggingCardId = null
         this.offset = [0, 0]
         this.isDown = false
-        this.shouldPanZoom = true
         this.panning = false
         this.angle = 0
         this.fullscreen = false
         this.isInErrorState = false
-        this.nudgedPanZoomRotate = null
         this.animator = new Animator()
+        this.nudgedPanZoomRotate = new NudgedPanZoomRotate(this.animator)
+        this.dom = createRef();
+        this.state = {
+            cs: [],
+            cards: {},
+            shouldPanZoom: true
+        }
+        this.canvas = new Canvas()
+        this.hitCanvas = new HitCanvas()
     }
 
-    stringifyTransform(transform: any, shouldPanZoom: boolean) {
+    stringifyTransform(transform?: number[], shouldPanZoom?: boolean) {
         if (transform) {
+            if (transform.length !== 4) {
+                throw new Error("Transform is the wrong size!")
+            }
             const [s, r, tx, ty] = transform
             return `${s},${r},${tx},${ty},${shouldPanZoom ? "pan" : "move"}`
         } else {
@@ -593,22 +698,30 @@ class Board {
             const parts = string.split(",")
             if (parts.length === 5) {
                 const [s, r, tx, ty, panOrMove] = string.split(",")
-                this.shouldPanZoom = panOrMove === "pan"
-                return [
-                    parseFloat(s),
-                    parseFloat(r),
-                    parseFloat(tx),
-                    parseFloat(ty),
-                ]
+                return {
+                    transform: [
+                        parseFloat(s),
+                        parseFloat(r),
+                        parseFloat(tx),
+                        parseFloat(ty),
+                    ],
+                    panOrMove
+                }
             }
         }
         return null
     }
 
-    async oncreate(vnode: VnodeDOM<{}>) {
+    async componentDidMount() {
         window.addEventListener("resize", throttle(async () => {
-            await this.reload(vnode)
+            await this.reload()
         }, 1000))
+
+        this.nudgedPanZoomRotate.setTransformCallback(() => {
+            this.setState({
+                domTransform: Object.assign({}, this.nudgedPanZoomRotate.currentTransform?.getMatrix())
+            })
+        })
 
         const success = document.getElementById("success")
         if (success) {
@@ -619,7 +732,7 @@ class Board {
             })
         }
 
-        await this.reload(vnode)
+        await this.reload()
     }
 
     within(val: number, target: number, margin: number) {
@@ -628,50 +741,44 @@ class Board {
         )
     }
 
-    async reload(vnode: VnodeDOM<{}>) {
-        const dom = vnode.dom
-        const child = dom.getElementsByClassName("view-pane")[0] as HTMLElement
-        const hitCanvasChild = dom.getElementsByClassName("view-hit-canvas")[0] as HTMLElement
-        this.dom = new Canvas(child as HTMLElement)
-        this.hitDom = new HitCanvas(
-            hitCanvasChild as HTMLElement,
-            child as HTMLElement
-        )
-        const transformArray = this.parseTransform(window.location.hash.slice(1))
+    async reload() {
+        const dom = this.dom?.current
+        if (!dom) return
+        const child = dom.getElementsByClassName("view-pane")[0] as HTMLCanvasElement
+        const hitCanvasChild = dom.getElementsByClassName("view-hit-canvas")[0] as HTMLCanvasElement
 
-        this.nudgedPanZoomRotate = new NudgedPanZoomRotate(throttle(() => {
-            location.hash = this.stringifyTransform(this.nudgedPanZoomRotate?.currentTransform.toArray(), this.shouldPanZoom)
-        }, 300), this.animator)
+        this.canvas.setDOM(child)
+        this.hitCanvas.setDOM(hitCanvasChild)
+        this.hitCanvas.setTargetDOM(child)
 
-        this.nudgedPanZoomRotate.onAnimationFrame(() => {
-            m.redraw()
-        })
+        const { transform: transformArray, panOrMove } = this.parseTransform(window.location.hash.slice(1))
 
         this.nudgedPanZoomRotate.init()
 
         if (transformArray) {
-            await this.nudgedPanZoomRotate.setTransform(transformArray)
+            this.nudgedPanZoomRotate.setTransform(transformArray)
         }
 
-        const cardUpdateCallback = ({ fromUserId, cardUpdates: newStates }: { fromUserId: number, cardUpdates: any }) => {
-            const command: any = {}
-            newStates.forEach((s: any) => {
+        const cardUpdateCallback = ({ cardUpdates: newStates }: ServerCardUpdate) => {
+            let command: Spec<CardIndex> = {}
+            newStates?.forEach((s) => {
                 if (s.id) {
-                    const card = this.cards[s.id]
+                    const card = this.state.cards[s.id]
                     if (card) {
-                        if (typeof (command[card.id]) === "undefined") {
-                            command[card.id] = {}
-                        }
                         if (
                             typeof (s.x) !== "undefined" &&
                             typeof (s.y) !== "undefined"
                         ) {
-                            command[card.id]["x"] = {
-                                $set: s.x + (innerWidth / 2)
-                            }
-                            command[card.id]["y"] = {
-                                $set: s.y + (innerHeight / 2)
-                            }
+                            command = update(command, {
+                                [card.id]: {
+                                    x: {
+                                        $set: s.x + (innerWidth / 2)
+                                    },
+                                    y: {
+                                        $set: s.y + (innerHeight / 2)
+                                    }
+                                }
+                            })
 
                             const sx = s.x + (innerWidth / 2)
                             const sy = s.y + (innerHeight / 2)
@@ -680,26 +787,33 @@ class Board {
                                 (!this.within(card.x, sx, 5)) ||
                                 (!this.within(card.y, sy, 5))
                             ) {
-                                command[card.id]["startX"] = {
-                                    $set: card.x
-                                }
-                                command[card.id]["startY"] = {
-                                    $set: card.y
-                                }
+                                command = update(command, {
+                                    [card.id]: {
+                                        startX: {
+                                            $set: card.x
+                                        },
+                                        startY: {
+                                            $set: card.y
+                                        }
+                                    }
+                                })
                             }
                         }
                         if (typeof (s.z) !== "undefined") {
-                            command[card.id]["z"] = {
-                                $set: s.z
-                            }
+                            command = update(command, {
+                                [card.id]: {
+                                    z: {
+                                        $set: s.x
+                                    }
+                                }
+                            })
                         }
                     }
                 }
             })
 
-            const newCards = update(this.cards, command)
+            const newCards = update(this.state.cards, command)
             this.setCards(newCards)
-            m.redraw()
         }
 
 
@@ -723,16 +837,14 @@ class Board {
 
         this.socket.on("disconnect", () => {
             this.showErrorState()
-            m.redraw()
         })
 
-        this.socket.on('cardUpdate', cardUpdateCallback)
+        this.socket.on("cardUpdate", cardUpdateCallback)
 
         await this.getInitialCardsFromServer()
-        m.redraw()
     }
 
-    redrawCards(initialCardsResponse: any = null) {
+    redrawCards(initialCardsResponse?: AxiosResponse<{ cards: ServerCard[] }>) {
         let cards
         if (initialCardsResponse) {
             const initialCards = [...initialCardsResponse.data.cards] as ServerCard[]
@@ -746,7 +858,7 @@ class Board {
                 return card
             })
         } else {
-            cards = Object.values(this.cards) as Card[]
+            cards = Object.values(this.state.cards) as Card[]
         }
 
         const cs = cards.map(card => {
@@ -757,7 +869,7 @@ class Board {
             }
         })
 
-        const cardsById: any = {}
+        const cardsById: { [key: string]: Card | Shape } = {}
         cs.forEach(c => {
             if (c) { cardsById[c.id] = c }
         })
@@ -770,10 +882,9 @@ class Board {
         this.redrawCards(initialCardsResponse)
     }
 
-    setCards(newCards: any) {
-        this.cards = newCards
-        this.cs = Object.values(this.cards)
-        this.cs.sort((a: any, b: any) => {
+    setCards(newCards: { [key: string]: Card | Shape }) {
+        const cs = Object.values(this.state.cards)
+        cs.sort((a: (Card | Shape), b: (Card | Shape)) => {
             if (a.z > b.z) {
                 return 1
             } else {
@@ -781,28 +892,28 @@ class Board {
             }
         })
 
-        this.cs.forEach(c => {
+        cs.forEach(c => {
             if (c?.type === "shape") {
                 const shape = c as unknown as Shape
                 shape.points.forEach((pointOrId, i) => {
                     if (typeof pointOrId === "number") {
-                        shape.points.splice(i, 1, this.cards[pointOrId])
+                        shape.points.splice(i, 1, (this.state.cards[pointOrId] as Card))
                     } else {
-                        shape.points.splice(i, 1, this.cards[pointOrId.id])
+                        shape.points.splice(i, 1, (this.state.cards[pointOrId.id] as Card))
                     }
                 })
             } else if (c?.type === "card") {
-                if (typeof (c.startX) !== "undefined" && typeof (c.startY) !== "undefined") {
-                    const currentAni = this.animator.animations.find((ani) => ani.name === `card-update-${c.id}`)
-                    if (!currentAni) {
-                        this.animator.start({
-                            elapsedTime: 0,
-                            name: `card-update-${c.id}`,
-                            startState: {},
-                            duration: 150,
-                            startValue: 0,
-                            endValue: 1000,
-                            callback: (_ani: any, currentValue: number) => {
+                const currentAni = this.animator.animations.find((ani) => ani.name === `card-update-${c.id}`)
+                if (!currentAni) {
+                    this.animator.start({
+                        elapsedTime: 0,
+                        name: `card-update-${c.id}`,
+                        startState: {},
+                        duration: 150,
+                        startValue: 0,
+                        endValue: 1000,
+                        callback: (_ani: Animation, currentValue: number) => {
+                            if (typeof (c.startX) !== "undefined" && typeof (c.startY) !== "undefined") {
                                 const dx = c.x - c.startX
                                 const dy = c.y - c.startY
 
@@ -811,31 +922,46 @@ class Board {
 
                                 c.animationX = c.startX + scaledDx
                                 c.animationY = c.startY + scaledDy
-
-                                this.render()
-                            },
-                            done: () => {
-                                c.animationX = undefined
-                                c.animationY = undefined
-                                c.startX = undefined
-                                c.startY = undefined
                             }
-                        })
-                    }
+                        },
+                        done: () => {
+                            c.animationX = undefined
+                            c.animationY = undefined
+                            c.startX = undefined
+                            c.startY = undefined
+                        }
+                    })
                 }
             }
         })
 
-        this.hitDom.setObjects(this.cs)
+        this.hitCanvas.setObjects(cs as Point[])
+
+        this.setState({
+            cards: newCards,
+            cs
+        })
     }
 
-    mouseDown(e: any) {
-        if (this.shouldPanZoom) {
+    mouseDown(e: {
+        preventDefault: () => void,
+        nativeEvent: {
+            stopImmediatePropagation: () => void,
+        },
+        clientX: number,
+        clientY: number
+    }) {
+        if (this.state.shouldPanZoom) {
             this.nudgedPanZoomRotate?.startPan(e)
         } else {
-            const obj = this.hitDom.getObjectAt(e.clientX, e.clientY)
-            if (obj) {
-                this.mouseDownFor(obj, e)
+            const obj = this.hitCanvas?.getObjectAt(e.clientX, e.clientY)
+            if (obj && obj.type === "card") {
+                this.mouseDownFor(obj as Card, {
+                    preventDefault: e.preventDefault,
+                    stopImmediatePropagation: e.nativeEvent.stopImmediatePropagation,
+                    clientX: e.clientX,
+                    clientY: e.clientY
+                })
             }
         }
     }
@@ -845,14 +971,17 @@ class Board {
         e: {
             stopImmediatePropagation: () => void,
             preventDefault: () => void,
-            target: HTMLElement,
             clientX: number,
             clientY: number
         }
     ) {
-        if (this.shouldPanZoom) return
+        if (this.state.shouldPanZoom) return
         e.stopImmediatePropagation()
         this.isDown = true
+
+        if (!this.nudgedPanZoomRotate?.currentTransform) {
+            return
+        }
 
         const [x, y] = this.nudgedPanZoomRotate?.currentTransform.transform(
             [c.x, c.y]
@@ -867,23 +996,25 @@ class Board {
 
     async mouseUp(
         e: {
-            stopImmediatePropagation: () => void,
             preventDefault: () => void,
+            nativeEvent: {
+                stopImmediatePropagation: () => void,
+            },
             clientX: number,
             clientY: number
-        }
+        },
     ) {
-        if (this.shouldPanZoom) {
+        if (this.state.shouldPanZoom) {
             if (this.nudgedPanZoomRotate?.panning) {
-                await this.nudgedPanZoomRotate?.endPan()
+                this.nudgedPanZoomRotate?.endPan()
             }
         }
-        e.stopImmediatePropagation()
+        e.nativeEvent.stopImmediatePropagation()
         if (!this.isDown) return
         this.isDown = false
 
         if (this.draggingCardId) {
-            const card = this.cards[this.draggingCardId]
+            const card = this.state.cards[this.draggingCardId]
 
             if (card && this.nudgedPanZoomRotate) {
                 try {
@@ -897,7 +1028,7 @@ class Board {
                         ]
                     }, {
                         headers: {
-                            'X-CSRF-TOKEN': this.csrf
+                            "X-CSRF-TOKEN": this.csrf
                         }
                     })
                 } catch (e) {
@@ -917,11 +1048,11 @@ class Board {
             <button id="error-button"> 
                 reload the page
             </button> to continue.
-        `, 'Disconnect', {
+        `, "Disconnect", {
             timeOut: 0,
             hideDuration: 0,
             extendedTimeOut: 0,
-            positionClass: 'toast-bottom-center',
+            positionClass: "toast-bottom-center",
             tapToDismiss: false,
             preventDuplicates: true,
             onShown: () => {
@@ -938,46 +1069,49 @@ class Board {
 
     async mouseMove(
         e: {
-            stopImmediatePropagation: () => void,
             preventDefault: () => void,
+            nativeEvent: {
+                stopImmediatePropagation: () => void,
+            },
             clientX: number,
             clientY: number
         },
         pan = true
     ) {
-        if (this.shouldPanZoom) {
+        if (this.state.shouldPanZoom) {
             if (this.nudgedPanZoomRotate?.panning && pan) {
-                await this.nudgedPanZoomRotate?.continuePan(e)
+                this.nudgedPanZoomRotate?.continuePan(e)
                 return
             }
         }
-        e.stopImmediatePropagation()
+        e.nativeEvent.stopImmediatePropagation()
         e.preventDefault();
         if (this.isDown && this.draggingCardId) {
-            const card = this.cards[this.draggingCardId]
-            const command: any = {}
+            const card = this.state.cards[this.draggingCardId]
+            const command: Spec<CardIndex> = {}
             const newX = e.clientX + this.offset[0]
             const newY = e.clientY + this.offset[1]
 
             if (this.nudgedPanZoomRotate) {
-                const [x, y] = this.nudgedPanZoomRotate.currentTransform.inverse().transform([newX, newY])
+                if (this.nudgedPanZoomRotate.currentTransform) {
+                    const [x, y] = this.nudgedPanZoomRotate.currentTransform.inverse().transform([newX, newY])
 
-                command[card.id] = {
-                    x: {
-                        $set: x
-                    },
-                    y: {
-                        $set: y
-                    },
+                    command[card.id] = {
+                        x: {
+                            $set: x
+                        },
+                        y: {
+                            $set: y
+                        },
+                    }
                 }
-
             }
-            const movedCards = update(this.cards, command)
+            const movedCards = update(this.state.cards, command)
 
-            const zChanges: any = {}
+            const zChanges: Spec<CardIndex> = {}
             const cardList = Object.values(movedCards)
             if (card.type === "card") {
-                cardList.forEach((c: any) => {
+                cardList.forEach((c) => {
                     if (c.id === card.id) {
                         if (c.z !== cardList.length - 1) {
                             zChanges[c.id] = {
@@ -1016,60 +1150,65 @@ class Board {
                     cardUpdates: updates
                 }, {
                     headers: {
-                        'X-CSRF-TOKEN': this.csrf
+                        "X-CSRF-TOKEN": this.csrf
                     }
                 })
             }
         }
     }
 
-    async onWheel(e: any) {
-        if (this.shouldPanZoom) {
-            await this.nudgedPanZoomRotate?.onWheel(e)
+    async onWheel(e: React.WheelEvent) {
+        if (this.state.shouldPanZoom) {
+            this.nudgedPanZoomRotate?.onWheel(e)
+        }
+    }
+
+    updateCanvases() {
+        if (this.nudgedPanZoomRotate?.currentTransform) {
+            console.log("hi")
+            this.canvas?.render(
+                this.nudgedPanZoomRotate.currentTransform.getMatrix(),
+                this.state.cs as Point[]
+            )
+            this.hitCanvas?.render(
+                this.nudgedPanZoomRotate.currentTransform.getMatrix(),
+                this.state.cs as Point[]
+            )
         }
     }
 
     render() {
-        this.dom?.render(
-            this.nudgedPanZoomRotate?.currentTransform.getMatrix(),
-            this.cs
-        )
-        this.hitDom?.render(
-            this.nudgedPanZoomRotate?.currentTransform.getMatrix(),
-            this.cs
-        )
-    }
-
-    view(vnode: VnodeDOM) {
-        this.render()
+        this.updateCanvases()
         return (
-            <div>
+            <div ref={this.dom}>
                 <div id="view-inner">
                     <canvas
                         id="view-hit-canvas"
-                        class="view-hit-canvas"
+                        className="view-hit-canvas"
                         style={{
                             display: "none"
                         }}
                     ></canvas>
                     <canvas
                         id="view-pane"
-                        class="view-pane"
-                        onwheel={(e: any) => this.onWheel(e)}
-                        onmousemove={(e: MouseEvent) => this.mouseMove(e)}
-                        onmouseup={(e: MouseEvent) => this.mouseUp(e)}
-                        onmousedown={(e: MouseEvent) => {
+                        className="view-pane"
+                        onWheel={this.onWheel.bind(this)}
+                        onMouseMove={this.mouseMove.bind(this)}
+                        onMouseUp={this.mouseUp.bind(this)}
+                        onMouseDown={(e: React.MouseEvent) => {
                             this.mouseDown({
                                 clientX: e.clientX || 0,
                                 clientY: e.clientY || 0,
-                                stopImmediatePropagation: e.stopImmediatePropagation.bind(e),
-                                preventDefault: e.preventDefault.bind(e),
-                                target: e.target as HTMLElement
+                                nativeEvent: {
+                                    stopImmediatePropagation: e.nativeEvent.stopImmediatePropagation.bind(e),
+                                },
+
+                                preventDefault: e.preventDefault.bind(e)
                             })
                         }}
-                        ontouchstart={(e: TouchEvent) => {
+                        onTouchStart={(e: React.TouchEvent) => {
                             e.preventDefault()
-                            if (this.shouldPanZoom) {
+                            if (this.state.shouldPanZoom) {
                                 Array.from(e.changedTouches).forEach(t => {
                                     if (!this.touches.map(to => to.identifier).includes(t.identifier)) {
                                         this.nudgedPanZoomRotate?.startTouch(
@@ -1084,15 +1223,17 @@ class Board {
                                 this.mouseDown({
                                     clientX: e.touches[0]?.clientX || 0,
                                     clientY: e.touches[0]?.clientY || 0,
-                                    stopImmediatePropagation: e.stopImmediatePropagation.bind(e),
+                                    nativeEvent: {
+                                        stopImmediatePropagation: e.nativeEvent.stopImmediatePropagation.bind(e),
+
+                                    },
                                     preventDefault: e.preventDefault.bind(e),
-                                    target: e.target as HTMLElement
                                 })
                             }
                         }}
-                        ontouchmove={async (e: TouchEvent) => {
+                        onTouchMove={async (e: React.TouchEvent) => {
                             e.preventDefault()
-                            if (this.shouldPanZoom) {
+                            if (this.state.shouldPanZoom) {
                                 for (let i = 0; i < e.changedTouches.length; i += 1) {
                                     const t = e.changedTouches[i]
                                     if (!this.touches.map(to => to.identifier).includes(t.identifier)) {
@@ -1114,21 +1255,21 @@ class Board {
                                 this.mouseMove({
                                     clientX: e.touches[0]?.clientX || 0,
                                     clientY: e.touches[0]?.clientY || 0,
-                                    stopImmediatePropagation: e.stopImmediatePropagation.bind(e),
+                                    nativeEvent: {
+                                        stopImmediatePropagation: e.nativeEvent.stopImmediatePropagation.bind(e)
+                                    },
                                     preventDefault: e.preventDefault.bind(e)
                                 }, false)
                             }
                         }}
-                        ontouchend={async (e: TouchEvent) => {
+                        onTouchEnd={async (e: React.TouchEvent) => {
                             e.preventDefault()
-                            if (this.shouldPanZoom) {
+                            if (this.state.shouldPanZoom) {
                                 for (let i = 0; i < e.changedTouches.length; i += 1) {
                                     const t = e.changedTouches[i]
                                     if (i > -1) {
                                         await this.nudgedPanZoomRotate?.endTouch(
-                                            t.identifier,
-                                            t.clientX - (innerWidth / 2),
-                                            t.clientY - (innerHeight / 2),
+                                            t.identifier
                                         )
                                         this.touches.splice(i, 1)
                                     }
@@ -1137,7 +1278,9 @@ class Board {
                                 this.mouseUp({
                                     clientX: e.touches[0]?.clientX || 0,
                                     clientY: e.touches[0]?.clientY || 0,
-                                    stopImmediatePropagation: e.stopImmediatePropagation.bind(e),
+                                    nativeEvent: {
+                                        stopImmediatePropagation: e.nativeEvent.stopImmediatePropagation.bind(e)
+                                    },
                                     preventDefault: e.preventDefault.bind(e)
                                 })
                             }
@@ -1147,9 +1290,10 @@ class Board {
                 </div>
                 <button
                     disabled={this.isInErrorState}
-                    class="button"
-                    onclick={(e: MouseEvent) => {
+                    className="button"
+                    onClick={() => {
                         this.shouldPanZoom = !this.shouldPanZoom
+                        if (!this.nudgedPanZoomRotate?.currentTransform) return
                         window.location.hash = this.stringifyTransform(this.nudgedPanZoomRotate?.currentTransform.toArray(), this.shouldPanZoom)
                     }}
                 >
@@ -1157,9 +1301,9 @@ class Board {
                 </button>
                 <button
                     disabled={this.isInErrorState}
-                    class="button"
+                    className="button"
                     style={{ bottom: "0px", display: this.shouldPanZoom ? "initial" : "none" }}
-                    onclick={() => {
+                    onClick={() => {
                         if (this.fullscreen) {
                             document.exitFullscreen()
                             this.fullscreen = false
@@ -1174,24 +1318,24 @@ class Board {
                 <button
                     disabled={this.isInErrorState}
                     style={{ left: "50%", transform: "translate(-50%, 0%)", display: this.shouldPanZoom ? "initial" : "none" }}
-                    onclick={async () => {
+                    onClick={async () => {
                         this.nudgedPanZoomRotate?.rotate()
                     }}
-                    class="button"
+                    className="button"
                 >
                     Rotate
                 </button>
                 <button
                     style={{ left: "100%", transform: "translate(-100%, 0%)" }}
-                    onclick={async () => {
+                    onClick={async () => {
                         await axios.post("/sign-out", null, {
                             headers: {
-                                'X-CSRF-TOKEN': this.csrf
+                                "X-CSRF-TOKEN": this.csrf
                             }
                         })
                         window.location.href = "/"
                     }}
-                    class="button"
+                    className="button"
                 >
                     Sign out
                 </button>
@@ -1204,9 +1348,9 @@ class Board {
     }
 }
 
-function throttle(func: any, timeFrame: number) {
-    let lastTime = 0;
-    let interval: any = null;
+function throttle(func: () => void, timeFrame: number) {
+    let lastTime = 0
+    let interval: NodeJS.Timeout
     return function () {
         const now = Date.now();
         if (now - lastTime >= timeFrame) {
@@ -1224,31 +1368,10 @@ function throttle(func: any, timeFrame: number) {
 const initApp = async () => {
     await new Promise(res => window.addEventListener("load", res))
 
-    m.mount(
-        document.getElementById('view') as HTMLElement,
-        //@ts-ignore
-        Board
-    );
-}
-
-function resizeCanvasToDisplaySize(canvas: any, widthOverride?: number, heightOverride?: number) {
-    // look up the size the canvas is being displayed
-    let width = canvas.clientWidth;
-    let height = canvas.clientHeight;
-
-    if (typeof (widthOverride) !== "undefined" && typeof (heightOverride) !== "undefined") {
-        width = widthOverride
-        height = heightOverride
-    }
-
-    // If it's resolution does not match change it
-    if (canvas.width !== width || canvas.height !== height) {
-        canvas.width = width;
-        canvas.height = height;
-        return true;
-    }
-
-    return false;
+    ReactDOM.render(
+        <Board />,
+        document.getElementById("view") as HTMLElement
+    )
 }
 
 initApp()
